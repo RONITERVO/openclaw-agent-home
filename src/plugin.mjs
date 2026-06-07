@@ -55,6 +55,12 @@ async function serveAgentHomeRoute(request, response) {
     return true;
   }
 
+  if (url.pathname === `${routeBase}/api/reaction`) {
+    const snapshot = await collectSnapshot({ force: url.searchParams.get("force") === "1" });
+    sendJson(response, 200, snapshot.reactionForecast || { schemaVersion: 1, state: "unknown" });
+    return true;
+  }
+
   if (url.pathname === `${routeBase}/api/health`) {
     sendJson(response, 200, { ok: true });
     return true;
@@ -96,6 +102,18 @@ export default definePluginEntry({
       } catch (error) {
         respond(false, {
           code: "AGENT_HOME_SNAPSHOT_FAILED",
+          message: String(error?.message || error),
+        });
+      }
+    }, { scope: "operator.read" });
+
+    api.registerGatewayMethod("agentHome.reactionForecast", async ({ params, respond }) => {
+      try {
+        const snapshot = await collectSnapshot({ force: Boolean(params?.force) });
+        respond(true, snapshot.reactionForecast || { schemaVersion: 1, state: "unknown" });
+      } catch (error) {
+        respond(false, {
+          code: "AGENT_HOME_REACTION_FORECAST_FAILED",
           message: String(error?.message || error),
         });
       }

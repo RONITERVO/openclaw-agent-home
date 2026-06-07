@@ -77,6 +77,28 @@ http://127.0.0.1:18880/api/snapshot
 http://127.0.0.1:18880/api/processes
 ```
 
+**Reaction forecast:**
+
+```text
+http://127.0.0.1:18880/api/reaction
+```
+
+`/api/reaction` is the backend-first answer to "when will the agent react if
+the future is knowable?" It does not ask the agent to narrate a promise. It
+derives an honest forecast from local OpenClaw and Windows facts:
+
+- open tool calls in the session trajectory
+- running or queued OpenClaw tasks
+- process-monitor activities and any trustworthy ETA they expose
+- cron next-wake timestamps
+- heartbeat intervals and the last heartbeat timestamp
+- pending human-message state from the stored transcript
+
+The response separates active work from scheduled opportunities. It reports
+`nextKnownAt` only when a trustworthy timestamp exists; otherwise it says why
+the next reaction is unknown, such as "after the running tool returns" or
+"heartbeat may skip when there is nothing useful to say."
+
 `/api/processes` is the backend-first progress contract for process visibility.
 It does not require the agent to pass progress facts. On Windows it samples what
 the PC can actually expose:
@@ -115,15 +137,17 @@ The snapshot currently collects:
 - `openclaw security audit --deep`
 - Windows posture when available
 - Windows process transparency and local file-growth progress signals
+- reaction forecast from trajectory, tasks, cron, heartbeat, transcript, and
+  process evidence
 - the latest OpenClaw session transcript JSONL
 - the latest OpenClaw trajectory JSONL for tool/command events
 - Git workspace status/diff for `agent-home`
 
-The existing Control UI/Gateway can eventually replace the subprocess adapter with authenticated Gateway route/RPC data for the same categories: gateway health, channel state, sessions, tasks/subagents, cron, node status, plugin health, memory/heartbeat status, and model/provider status.
+The existing Control UI/Gateway can eventually replace the subprocess adapter with authenticated Gateway route/RPC data for the same categories: gateway health, channel state, sessions, tasks/subagents, cron, node status, plugin health, memory/heartbeat status, reaction forecast, and model/provider status.
 
 ## Release Direction
 
-The local server is an MVP adapter. The release target is a native OpenClaw plugin with a Gateway route and an `agentHome.snapshot` method.
+The local server is an MVP adapter. The release target is a native OpenClaw plugin with Gateway routes and `agentHome.snapshot` / `agentHome.reactionForecast` methods.
 
 See [docs-plugin-conversion.md](docs-plugin-conversion.md).
 

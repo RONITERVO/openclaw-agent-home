@@ -61,6 +61,7 @@ Target RPC:
 
 ```text
 agentHome.snapshot
+agentHome.reactionForecast
 ```
 
 The browser should fetch one redacted snapshot. UI components should not call
@@ -70,7 +71,8 @@ Current bridge files:
 
 - `openclaw.plugin.json` declares native plugin identity/config.
 - `package.json#openclaw.extensions` points to `src/plugin.mjs`.
-- `src/plugin.mjs` registers the authenticated route and `agentHome.snapshot`.
+- `src/plugin.mjs` registers the authenticated route plus
+  `agentHome.snapshot` and `agentHome.reactionForecast`.
 - `src/server.mjs` now exports `collectSnapshot()` and only starts the
   standalone server when executed directly.
 
@@ -95,6 +97,8 @@ Current MVP collector:
 - `openclaw cron status`
 - `openclaw cron list --json`
 - `openclaw security audit --deep`
+- reaction forecast from trajectory, task, cron, heartbeat, transcript, and
+  process-monitor facts
 - Windows posture through PowerShell
 
 Plugin collector target:
@@ -108,6 +112,8 @@ Plugin collector target:
 - loaded plugin list and plugin errors
 - model/provider auth or pricing health when useful
 - memory/heartbeat state
+- reaction forecast method built from first-class Gateway/session/task/cron
+  state instead of subprocess parsing
 - optional Workboard methods when plugin is enabled and allowed
 - host posture provider as optional platform adapter
 

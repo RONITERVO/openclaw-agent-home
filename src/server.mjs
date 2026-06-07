@@ -125,6 +125,33 @@ function ageMs(timestamp, now) {
   return Math.max(0, now - Number(timestamp));
 }
 
+function timestampMs(value) {
+  if (value == null) return null;
+  if (Number.isFinite(Number(value))) return Number(value);
+  const parsed = Date.parse(String(value));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function durationLabel(ms) {
+  const duration = Math.max(0, Number(ms) || 0);
+  if (duration < 1000) return "now";
+  const seconds = Math.round(duration / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) return `${hours}h`;
+  const days = Math.round(hours / 24);
+  return `${days}d`;
+}
+
+function confidenceRank(value) {
+  if (value === "high") return 3;
+  if (value === "medium") return 2;
+  if (value === "low") return 1;
+  return 0;
+}
+
 function statusLabel(status) {
   if (!status) return "unknown";
   if (["succeeded", "done", "completed", "ok"].includes(status)) return "done";
@@ -453,6 +480,290 @@ function buildIntegrations(statusJson, cronStatus, cronList, windows) {
   };
 }
 
+function normalizeForecastItem(item, now) {
+  const atMs = timestampMs(item.atMs ?? item.at);
+  const etaMs = Number.isFinite(Number(item.etaMs)) ? Math.max(0, Number(item.etaMs)) : null;
+  return {
+    kind: item.kind || "unknown",
+    status: item.status || "unknown",
+    source: item.source || "backend",
+    title: compactText(item.title || "Agent reaction signal", 96),
+    detail: compactText(item.detail || "", 220),
+    confidence: item.confidence || "low",
+    at: atMs == null ? null : new Date(atMs).toISOString(),
+    inMs: atMs == null ? null : Math.max(0, atMs - now),
+    inLabel: atMs == null ? "unknown" : durationLabel(atMs - now),
+    etaMs,
+    etaLabel: etaMs == null ? "unknown" : durationLabel(etaMs),
+    reason: compactText(item.reason || "", 260),
+    evidence: (item.evidence || []).filter(Boolean).map((value) => compactText(value, 180)).slice(0, 5),
+  };
+}
+
+function nextCronTimestamp(job) {
+  const candidates = [
+    job?.nextWakeAtMs,
+    job?.nextRunAtMs,
+    job?.nextAtMs,
+    job?.nextRunAt,
+    job?.nextAt,
+    job?.scheduledAt,
+  ];
+  return candidates.map(timestampMs).find((value) => value != null) ?? null;
+}
+
+function heartbeatForecastItems(statusJson, now) {
+  const heartbeat = statusJson?.heartbeat || {};
+  const agents = Array.isArray(heartbeat.agents) ? heartbeat.agents : [];
+  const lastHeartbeatAt = timestampMs(statusJson?.lastHeartbeat?.ts);
+  return agents
+    .filter((agent) => agent?.enabled && Number.isFinite(Number(agent.everyMs)))
+    .map((agent) => {
+      const everyMs = Number(agent.everyMs);
+      let nextAt = lastHeartbeatAt == null ? null : lastHeartbeatAt + everyMs;
+      if (nextAt != null && nextAt < now) {
+        nextAt += Math.ceil((now - nextAt) / everyMs) * everyMs;
+      }
+      return normalizeForecastItem({
+        kind: "heartbeat",
+        status: "scheduled",
+        source: "openclaw-status",
+        title: `${agent.agentId || heartbeat.defaultAgentId || "agent"} heartbeat window`,
+        detail: nextAt == null ? "Heartbeat is enabled, but the last heartbeat timestamp is not known." : `Every ${agent.every || durationLabel(everyMs)}.`,
+        confidence: "medium",
+        atMs: nextAt,
+        reason: "Heartbeat is a scheduled opportunity for the agent to react. It can still skip when HEARTBEAT.md is empty, during quiet hours, or when there is nothing useful to say.",
+        evidence: [
+          `enabled=${Boolean(agent.enabled)}`,
+          agent.every ? `interval=${agent.every}` : `intervalMs=${everyMs}`,
+          statusJson?.lastHeartbeat?.status ? `last=${statusJson.lastHeartbeat.status}` : null,
+        ],
+      }, now);
+    });
+}
+
+function cronForecastItems(cronStatus, cronList, now) {
+  const items = [];
+  const nextWakeAtMs = timestampMs(cronStatus?.nextWakeAtMs);
+  if (cronStatus?.enabled && nextWakeAtMs != null) {
+    items.push(normalizeForecastItem({
+      kind: "cron-wake",
+      status: "scheduled",
+      source: "cron-status",
+      title: "Next cron wake",
+      detail: "OpenClaw cron reports a next wake timestamp.",
+      confidence: "high",
+      atMs: nextWakeAtMs,
+      reason: "Cron exposes a concrete next wake timestamp. Delivery can still depend on the job and channel state.",
+      evidence: [`jobs=${cronStatus.jobs ?? "unknown"}`],
+    }, now));
+  }
+
+  for (const job of (cronList?.jobs || []).slice(0, 12)) {
+    const atMs = nextCronTimestamp(job);
+    if (atMs == null) continue;
+    items.push(normalizeForecastItem({
+      kind: "cron-job",
+      status: "scheduled",
+      source: "cron-list",
+      title: job.name || job.id || "Scheduled job",
+      detail: compactText(job.description || job.command || job.message || "", 180),
+      confidence: "high",
+      atMs,
+      reason: "A cron job exposes its own next scheduled run time.",
+      evidence: [job.id ? `id=${job.id}` : null, job.enabled === false ? "disabled" : "enabled"],
+    }, now));
+  }
+
+  const seen = new Set();
+  return items
+    .filter((item) => {
+      const key = `${item.kind}:${item.at}:${item.title}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((a, b) => Number(a.inMs ?? Number.MAX_SAFE_INTEGER) - Number(b.inMs ?? Number.MAX_SAFE_INTEGER));
+}
+
+function processForecastItems(processMonitor, now) {
+  return (processMonitor?.activities || []).slice(0, 6).map((activity) => {
+    const etaSeconds = Number(activity.progress?.etaSeconds);
+    const hasEta = Number.isFinite(etaSeconds) && etaSeconds >= 0;
+    return normalizeForecastItem({
+      kind: "process-completion",
+      status: "working",
+      source: "process-monitor",
+      title: activity.title || "Observed local work",
+      detail: compactText(activity.command || activity.progress?.reason || "", 180),
+      confidence: hasEta ? activity.progress?.confidence || "medium" : "low",
+      atMs: hasEta ? now + etaSeconds * 1000 : null,
+      etaMs: hasEta ? etaSeconds * 1000 : null,
+      reason: hasEta
+        ? "A process activity exposes a concrete ETA."
+        : activity.progress?.reason || "The PC exposes activity but not a reliable final total.",
+      evidence: [
+        activity.progress?.rateLabel ? `rate ${activity.progress.rateLabel}` : null,
+        ...(activity.evidence || []),
+      ],
+    }, now);
+  });
+}
+
+function latestRoleTimestamp(messages, role) {
+  return messages
+    .filter((message) => message.role === role)
+    .map((message) => timestampMs(message.at))
+    .filter((value) => value != null)
+    .sort((a, b) => b - a)[0] ?? null;
+}
+
+function buildReactionForecast({ now, statusJson, cronStatus, cronList, tasks, transcript, processMonitor, attention }) {
+  const items = [];
+  const blockingAttention = (attention || []).find((item) => ["urgent", "warning"].includes(item.severity));
+  if (blockingAttention) {
+    items.push(normalizeForecastItem({
+      kind: "needs-human",
+      status: "waiting-for-user",
+      source: blockingAttention.source || "attention",
+      title: blockingAttention.title || "Needs you",
+      detail: blockingAttention.reason || "",
+      confidence: "high",
+      reason: "The backend sees an unresolved attention item. The next useful agent reaction depends on human review or a state change.",
+      evidence: [`severity=${blockingAttention.severity}`],
+    }, now));
+  }
+
+  const openToolCalls = Array.isArray(transcript?.openToolCalls) ? transcript.openToolCalls : [];
+  for (const call of openToolCalls.slice(0, 5)) {
+    const startedAt = timestampMs(call.at);
+    items.push(normalizeForecastItem({
+      kind: "tool-return",
+      status: "working",
+      source: "session-trajectory",
+      title: `${call.kind || "tool"} is running`,
+      detail: call.command || call.detail || "",
+      confidence: "medium",
+      reason: "The session trajectory has a tool.call without a matching tool.result. The agent can react after that tool returns.",
+      evidence: [
+        startedAt == null ? null : `age ${durationLabel(now - startedAt)}`,
+        call.detail || null,
+      ],
+    }, now));
+  }
+
+  for (const task of tasks.filter((item) => ["running", "queued"].includes(item.status)).slice(0, 8)) {
+    const startedAt = timestampMs(task.startedAt);
+    items.push(normalizeForecastItem({
+      kind: task.status === "queued" ? "queued-task" : "running-task",
+      status: task.status,
+      source: task.runtime || "task",
+      title: task.label || "OpenClaw task",
+      detail: task.summary || "",
+      confidence: task.status === "queued" ? "low" : "medium",
+      reason: task.status === "queued"
+        ? "A task is queued. The backend knows it should run, but not exactly when the runtime will start it."
+        : "A task is running. The agent can react when the task posts a result or progress event.",
+      evidence: [
+        task.runId ? `run ${String(task.runId).slice(0, 8)}` : null,
+        startedAt == null ? null : `age ${durationLabel(now - startedAt)}`,
+      ],
+    }, now));
+  }
+
+  items.push(...processForecastItems(processMonitor, now));
+
+  const latestHumanAt = latestRoleTimestamp(transcript?.messages || [], "human");
+  const latestAgentAt = latestRoleTimestamp(transcript?.messages || [], "agent");
+  if (latestHumanAt != null && (latestAgentAt == null || latestHumanAt > latestAgentAt)) {
+    items.push(normalizeForecastItem({
+      kind: "pending-reply",
+      status: "responding",
+      source: "transcript",
+      title: "Human message is newer than the latest agent message",
+      detail: "The stored conversation has a human message without a newer agent reply.",
+      confidence: "medium",
+      reason: "This is a current-turn signal, not a future timer. It means the agent is expected to react as soon as the runtime advances.",
+      evidence: [`message age ${durationLabel(now - latestHumanAt)}`],
+    }, now));
+  }
+
+  items.push(...cronForecastItems(cronStatus, cronList, now));
+  items.push(...heartbeatForecastItems(statusJson, now));
+
+  const workingItems = items.filter((item) => ["working", "running", "queued", "responding"].includes(item.status));
+  const scheduledItems = items.filter((item) => item.at != null && item.status === "scheduled");
+  const blockingItem = items.find((item) => item.status === "waiting-for-user");
+  const timedWorkingItem = workingItems
+    .filter((item) => item.at != null)
+    .sort((a, b) => Number(a.inMs ?? Number.MAX_SAFE_INTEGER) - Number(b.inMs ?? Number.MAX_SAFE_INTEGER))[0] || null;
+  const nextScheduledItem = scheduledItems
+    .sort((a, b) => Number(a.inMs ?? Number.MAX_SAFE_INTEGER) - Number(b.inMs ?? Number.MAX_SAFE_INTEGER))[0] || null;
+
+  const activeWork = workingItems.find((item) => item.kind !== "pending-reply") || null;
+  const pendingReply = items.find((item) => item.kind === "pending-reply") || null;
+  let state = "idle";
+  let primary = nextScheduledItem;
+  let label = "No known future reaction";
+  let detail = "The backend does not see active work, queued work, cron wakeups, or heartbeat timing beyond the current quiet state.";
+
+  if (blockingItem) {
+    state = "waiting-for-user";
+    primary = blockingItem;
+    label = "Waiting for you";
+    detail = blockingItem.reason;
+  } else if (activeWork) {
+    state = "working";
+    primary = timedWorkingItem || activeWork;
+    label = timedWorkingItem
+      ? `Likely next reaction in ${timedWorkingItem.inLabel}`
+      : "Working; next reaction is after current work returns";
+    detail = primary.reason || "Active work is visible, but no reliable return time is exposed.";
+  } else if (pendingReply) {
+    state = "responding";
+    primary = pendingReply;
+    label = "Reaction expected now";
+    detail = pendingReply.reason;
+  } else if (nextScheduledItem) {
+    state = "scheduled";
+    primary = nextScheduledItem;
+    label = `Next scheduled opportunity in ${nextScheduledItem.inLabel}`;
+    detail = nextScheduledItem.reason;
+  }
+
+  const nextKnown = state === "working" ? timedWorkingItem : state === "scheduled" ? nextScheduledItem : null;
+  const confidence = primary?.confidence || (state === "idle" ? "high" : "low");
+
+  return {
+    schemaVersion: 1,
+    generatedAt: new Date(now).toISOString(),
+    state,
+    label,
+    detail: compactText(detail, 260),
+    confidence,
+    primarySource: primary?.source || null,
+    nextKnownAt: nextKnown?.at || null,
+    nextKnownInMs: nextKnown?.inMs ?? null,
+    nextKnownLabel: nextKnown?.inLabel || "unknown",
+    knownFutureAvailable: Boolean(nextKnown?.at),
+    items: items
+      .sort((a, b) => {
+        if (a.status === "waiting-for-user" && b.status !== "waiting-for-user") return -1;
+        if (b.status === "waiting-for-user" && a.status !== "waiting-for-user") return 1;
+        if (a.status !== "scheduled" && b.status === "scheduled") return -1;
+        if (b.status !== "scheduled" && a.status === "scheduled") return 1;
+        if (a.at && b.at) return Number(a.inMs ?? 0) - Number(b.inMs ?? 0);
+        return confidenceRank(b.confidence) - confidenceRank(a.confidence);
+      })
+      .slice(0, 14),
+    limitations: [
+      "Agent Home reports future reactions only when local OpenClaw state exposes them.",
+      "Running model inference usually has no OS-level ETA; active tool/process work is observable, but completion time is unknown unless a trustworthy ETA exists.",
+      "Heartbeat and cron entries are scheduled opportunities, not guaranteed visible messages.",
+    ],
+  };
+}
+
 function latestSession(sessionsJson) {
   const sessions = Array.isArray(sessionsJson?.sessions) ? sessionsJson.sessions : [];
   return [...sessions].sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0))[0] || null;
@@ -559,10 +870,13 @@ function parseTranscriptMessages(lines) {
 }
 
 function parseTrajectory(lines) {
-  return lines.map((row) => {
+  const events = [];
+  const openToolCalls = new Map();
+
+  for (const row of lines) {
     const data = row.data || {};
     if (row.type === "tool.call") {
-      return {
+      const event = {
         id: data.toolCallId || null,
         at: row.ts,
         source: "trajectory",
@@ -572,9 +886,12 @@ function parseTrajectory(lines) {
         command: compactValue(data.arguments?.command || data.arguments || "", 220),
         detail: compactText(data.arguments?.cwd || row.sessionKey || "", 140),
       };
+      events.push(event);
+      openToolCalls.set(event.id || `${row.ts}:${event.kind}`, event);
+      continue;
     }
     if (row.type === "tool.result") {
-      return {
+      const event = {
         id: data.toolCallId || null,
         at: row.ts,
         source: "trajectory",
@@ -585,9 +902,17 @@ function parseTrajectory(lines) {
         detail: compactText(data.output || "", 240),
         durationMs: data.result?.durationMs ?? null,
       };
+      events.push(event);
+      if (event.id) openToolCalls.delete(event.id);
     }
-    return null;
-  }).filter(Boolean).slice(-14);
+  }
+
+  return {
+    events: events.filter(Boolean).slice(-14),
+    openToolCalls: [...openToolCalls.values()]
+      .filter((event) => event.status === "running")
+      .slice(-8),
+  };
 }
 
 async function collectTranscript(sessionsJson) {
@@ -600,9 +925,10 @@ async function collectTranscript(sessionsJson) {
     sessionKey: session?.key || null,
     sessionId: session?.sessionId || null,
     messages: parsed.messages,
-    toolEvents: [...parsed.toolEvents, ...trajectory]
+    toolEvents: [...parsed.toolEvents, ...trajectory.events]
       .sort((a, b) => new Date(a.at || 0).getTime() - new Date(b.at || 0).getTime())
       .slice(-14),
+    openToolCalls: trajectory.openToolCalls,
     source: "openclaw-session-store",
   };
 }
@@ -708,6 +1034,8 @@ function numberLabel(value) {
 function currentMode(snapshot) {
   if ((snapshot.attention || []).some((item) => ["urgent", "warning"].includes(item.severity))) return "needs-you";
   if (["running", "queued", "active"].includes(snapshot.focus?.state) || snapshot.taskSummary?.active) return "working";
+  if (snapshot.reactionForecast?.state === "waiting-for-user") return "needs-you";
+  if (["working", "responding"].includes(snapshot.reactionForecast?.state)) return "working";
   return "quiet";
 }
 
@@ -811,6 +1139,7 @@ function buildUiViewModel(snapshot) {
       count: snapshot.attention?.length || 0,
       items: (snapshot.attention || []).slice(0, 4),
     },
+    reactionForecast: snapshot.reactionForecast || null,
     fileEdits: snapshot.fileEdits || {
       title: "File Edits",
       count: 0,
@@ -821,6 +1150,7 @@ function buildUiViewModel(snapshot) {
     handoff: {
       rawSnapshotUrl: "/api/snapshot",
       viewUrl: "/api/view",
+      reactionForecastUrl: "/api/reaction",
       refreshMs: 8000,
       maxConversationRows: 9,
       maxTerminalRows: 9,
@@ -1088,6 +1418,16 @@ export async function collectSnapshot({ force = false } = {}) {
     const focus = chooseFocus(sessionsJson.sessions || [], tasks, now);
     const attention = buildAttention({ statusJson, tasks, security, windows, processMonitor });
     const transcript = await collectTranscript(sessionsJson);
+    const reactionForecast = buildReactionForecast({
+      now,
+      statusJson,
+      cronStatus,
+      cronList,
+      tasks,
+      transcript,
+      processMonitor,
+      attention,
+    });
     const commandEvents = [
       commandEvent("OpenClaw status", statusResult),
       commandEvent("Sessions", sessionsResult),
@@ -1131,6 +1471,7 @@ export async function collectSnapshot({ force = false } = {}) {
       taskSummary: statusJson?.tasks || null,
       attention,
       activeEvent,
+      reactionForecast,
       transcript,
       commandEvents,
       fileEdits,
@@ -1217,6 +1558,16 @@ async function handleRequest(request, response) {
         "cache-control": "no-store",
       });
       response.end(JSON.stringify(snapshot.processMonitor || { available: false }, null, 2));
+      return;
+    }
+
+    if (url.pathname === "/api/reaction") {
+      const snapshot = await collectSnapshot({ force: url.searchParams.get("force") === "1" });
+      response.writeHead(200, {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+      });
+      response.end(JSON.stringify(snapshot.reactionForecast || { schemaVersion: 1, state: "unknown" }, null, 2));
       return;
     }
 
