@@ -23,6 +23,8 @@ The display may show:
 - high-level Windows posture, when available
 - process progress summaries, owned TCP socket counts, local file-growth rates,
   and redacted command lines in ambient-safe form
+- reaction forecast summaries such as active tool return, next cron wake,
+  heartbeat opportunity, or "waiting for user" state
 
 ## Local-Only MVP
 
@@ -54,3 +56,7 @@ The raw `/api/processes` endpoint is more detailed than the ambient display. It
 can include local paths, process names, redacted command lines, remote IP
 addresses, and recently changed file paths. Keep it behind local/Gateway auth
 and treat it as operator telemetry, not public dashboard data.
+
+The raw `/api/reaction` endpoint is intentionally low-content. It should carry
+state, timestamps, confidence, reasons, and short redacted labels, not transcript
+bodies or raw tool outputs.

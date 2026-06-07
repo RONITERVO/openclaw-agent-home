@@ -1,5 +1,31 @@
 # Release Notes
 
+## 0.1.2
+
+Backend reaction forecast release.
+
+### What Ships
+
+- Raw `/api/reaction` endpoint for "what happens next" telemetry.
+- `reactionForecast` section in `/api/snapshot` and `/api/view`.
+- Native plugin route and Gateway method parity through
+  `agentHome.reactionForecast`.
+- Forecast sources:
+  - open tool calls from session trajectory
+  - running and queued tasks
+  - process-monitor activity and trustworthy process ETA when available
+  - cron next wake/job timestamps
+  - heartbeat interval plus last heartbeat timestamp
+  - pending human-message state from the transcript
+  - attention blockers that mean the agent is waiting for the human
+- Honest forecast model: exposes `nextKnownAt` only for a trustworthy timestamp
+  and otherwise explains why the future is unknown.
+
+### Verified
+
+- `npm run snapshot`
+- `/api/reaction` shape through the standalone backend
+
 ## 0.1.1
 
 Backend process transparency release.

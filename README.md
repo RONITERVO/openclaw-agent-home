@@ -14,8 +14,8 @@ This is the first local vertical slice. It is intentionally dependency-free:
 - Browser UI renders one layout-ready view model from `/api/view`.
 - Subagent/task relationships are derived from session and task metadata.
 - No transcript bodies, tokens, raw tool args, or secrets are shown in ambient mode.
-- No clicks, scrolling, forms, tabs, menus, or visible controls required.
-- **Graceful UI Fallback:** The frontend includes a mock-data engine, allowing designers to iterate on the UI layout and CSS without needing a live backend or OpenClaw instance.
+- No clicks, forms, tabs, or menus required; the trace panel has one compact optional filter.
+- **Truthful UI Fallback:** if the backend is offline, the frontend renders empty telemetry shells instead of invented agent/process data.
 
 ## Purpose
 
@@ -25,6 +25,7 @@ OpenClaw Control can already provide the deeper operator surface: chats, setting
 - surface only the top few attention signals
 - show recent Telegram/OpenClaw session messages in compact ambient form
 - show tool calls, PowerShell commands, status, duration, and trimmed output
+- filter the trace panel down to manually invoked agent tool commands when collector noise is distracting
 - show file edit state for designers: changed paths, line counts, raw patch text, and Git hunks when a baseline exists
 - show local safety posture that matters on an always-visible screen
 - show verification, jobs, collector flow, and local sensor state in one frame
@@ -63,7 +64,7 @@ npm run snapshot
 http://127.0.0.1:18880/api/view
 ```
 
-*(Note: If the API is offline, the frontend will automatically render a high-fidelity mock state to allow continuous UI development).*
+*(Note: If the API is offline, the frontend renders empty telemetry panels. It does not invent transcript, process, or reaction data.)*
 
 **Raw collector data:**
 
@@ -76,6 +77,28 @@ http://127.0.0.1:18880/api/snapshot
 ```text
 http://127.0.0.1:18880/api/processes
 ```
+
+**Reaction forecast:**
+
+```text
+http://127.0.0.1:18880/api/reaction
+```
+
+`/api/reaction` is the backend-first answer to "when will the agent react if
+the future is knowable?" It does not ask the agent to narrate a promise. It
+derives an honest forecast from local OpenClaw and Windows facts:
+
+- open tool calls in the session trajectory
+- running or queued OpenClaw tasks
+- process-monitor activities and any trustworthy ETA they expose
+- cron next-wake timestamps
+- heartbeat intervals and the last heartbeat timestamp
+- pending human-message state from the stored transcript
+
+The response separates active work from scheduled opportunities. It reports
+`nextKnownAt` only when a trustworthy timestamp exists; otherwise it says why
+the next reaction is unknown, such as "after the running tool returns" or
+"heartbeat may skip when there is nothing useful to say."
 
 `/api/processes` is the backend-first progress contract for process visibility.
 It does not require the agent to pass progress facts. On Windows it samples what
@@ -115,15 +138,17 @@ The snapshot currently collects:
 - `openclaw security audit --deep`
 - Windows posture when available
 - Windows process transparency and local file-growth progress signals
+- reaction forecast from trajectory, tasks, cron, heartbeat, transcript, and
+  process evidence
 - the latest OpenClaw session transcript JSONL
 - the latest OpenClaw trajectory JSONL for tool/command events
 - Git workspace status/diff for `agent-home`
 
-The existing Control UI/Gateway can eventually replace the subprocess adapter with authenticated Gateway route/RPC data for the same categories: gateway health, channel state, sessions, tasks/subagents, cron, node status, plugin health, memory/heartbeat status, and model/provider status.
+The existing Control UI/Gateway can eventually replace the subprocess adapter with authenticated Gateway route/RPC data for the same categories: gateway health, channel state, sessions, tasks/subagents, cron, node status, plugin health, memory/heartbeat status, reaction forecast, and model/provider status.
 
 ## Release Direction
 
-The local server is an MVP adapter. The release target is a native OpenClaw plugin with a Gateway route and an `agentHome.snapshot` method.
+The local server is an MVP adapter. The release target is a native OpenClaw plugin with Gateway routes and `agentHome.snapshot` / `agentHome.reactionForecast` methods.
 
 See [docs-plugin-conversion.md](docs-plugin-conversion.md).
 

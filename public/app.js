@@ -3,6 +3,9 @@
 
 const REFRESH_RATE_MS = 3000;
 let stateCache = {};
+let terminalFilter = "all";
+let latestView = null;
+let latestProc = null;
 
 /* --- Utils & Formatters --- */
 const cls = (v) => String(v || "unknown").toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
@@ -10,7 +13,7 @@ const escape = (v) => String(v ?? "").replace(/[&<>"']/g, m => ({ '&': '&amp;', 
 const timeFormat = (iso) => new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }).format(iso ? new Date(iso) : new Date());
 
 const duration = (ms) => {
-  if (!ms || !Number.isFinite(Number(ms))) return "";
+  if (ms === undefined || ms === null || !Number.isFinite(Number(ms))) return "";
   if (ms < 1000) return `${Math.round(ms)}ms`;
   const sec = Math.floor(ms / 1000);
   return sec < 60 ? `${(ms / 1000).toFixed(1)}s` : `${Math.floor(sec / 60)}m ${(sec % 60).toString().padStart(2, '0')}s`;
@@ -25,10 +28,17 @@ const formatBytes = (bytes) => {
 };
 
 const statusText = (s) => {
-  if (["done", "ok", "clean"].includes(s)) return "OK";
+  if (["done", "ok", "clean", "quiet", "idle"].includes(s)) return "OK";
+  if (["scheduled"].includes(s)) return "DUE";
+  if (["needs-you", "waiting-for-user"].includes(s)) return "YOU";
   if (["failed", "warning", "urgent"].includes(s)) return "ERR";
-  if (["running", "working", "active"].includes(s)) return "RUN";
+  if (["running", "working", "active", "responding"].includes(s)) return "RUN";
   return String(s || "INF").toUpperCase().substring(0, 3);
+};
+
+const shortText = (value, max = 120) => {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  return text.length > max ? `${text.slice(0, max - 1).trim()}...` : text;
 };
 
 const highlightJSON = (obj) => {
@@ -89,12 +99,41 @@ const Chat = (c) => `
     `).join("") : `<div class="empty-state">${icons.empty}<p>No transcript</p></div>`}
   </div>`;
 
+const ReactionForecast = (forecast) => {
+  if (!forecast || (!forecast.state && !forecast.label && !(forecast.items || []).length)) return "";
+  const primary = (forecast.items || [])[0] || {};
+  const state = forecast.state || primary.status || "unknown";
+  const source = forecast.primarySource || primary.source || "";
+  const when = forecast.knownFutureAvailable && forecast.nextKnownLabel && forecast.nextKnownLabel !== "unknown"
+    ? forecast.nextKnownLabel
+    : primary.etaLabel && primary.etaLabel !== "unknown"
+      ? primary.etaLabel
+      : "unknown";
+  const label = forecast.label || primary.title || "Next reaction unknown";
+  const detail = forecast.detail || primary.reason || primary.detail || "";
+
+  return `
+    <div class="next-reaction ${cls(state)}">
+      <div class="next-reaction-top font-mono">
+        <span>NEXT // ${escape(statusText(state))}</span>
+        <span>${escape(when)}</span>
+      </div>
+      <div class="next-reaction-main">
+        <strong>${escape(shortText(label, 96))}</strong>
+        <span>${escape(forecast.confidence || primary.confidence || "unknown")} confidence${source ? ` / ${escape(source)}` : ""}</span>
+      </div>
+      ${detail ? `<p>${escape(shortText(detail, 150))}</p>` : ""}
+    </div>`;
+};
+
 // Renders deep process metrics exposing backend telemetry cleanly without inventing data.
-const Activities = (activeEv, proc) => {
+const Activities = (activeEv, proc, forecast) => {
   const processCards = (proc?.activities || []).map(act => {
     const prog = act.progress || {};
-    const isIndet = prog.percent === null;
-    const pct = isIndet ? 100 : prog.percent;
+    const percent = Number(prog.percent);
+    const hasPercent = Number.isFinite(percent);
+    const isIndet = !hasPercent;
+    const pct = isIndet ? 100 : Math.max(0, Math.min(100, percent));
     const hasNetwork = act.network?.sampleConnections?.length > 0;
 
     return `
@@ -166,16 +205,32 @@ const Activities = (activeEv, proc) => {
       <p style="font-size:14px; color:var(--text-muted); line-height:1.6;">${escape(activeEv.detail || "Operating within standard parameters.")}</p>
     </div>` : `<div class="empty-state">${icons.empty}<p>System Idle</p></div>`;
 
-  return `<div class="activities-stack">${processCards || fallbackCard}</div>`;
+  return `<div class="activities-stack">${ReactionForecast(forecast)}${processCards || fallbackCard}</div>`;
 };
 
-const Terminal = (t) => `
-  <header class="panel-header">
+const Terminal = (t) => {
+  const filters = t?.filters?.length ? t.filters : [
+    { id: "all", label: "All", count: t?.events?.length || 0 },
+    { id: "manual", label: "Manual", count: t?.manualEvents?.length || 0 },
+  ];
+  const events = terminalFilter === "manual" ? (t?.manualEvents || []) : (t?.events || []);
+
+  return `
+  <header class="panel-header terminal-header">
     <h2>${escape(t?.title || "Execution Trace")}</h2>
-    <span class="font-mono">${escape(t?.kicker || "Monitoring")}</span>
+    <div class="terminal-header-tools">
+      <span class="font-mono">${escape(t?.kicker || "Monitoring")}</span>
+      <div class="terminal-filter font-mono" aria-label="Trace filter">
+        ${filters.map(f => `
+          <button type="button" class="${terminalFilter === f.id ? "active" : ""}" data-term-filter="${escape(f.id)}" aria-pressed="${terminalFilter === f.id}">
+            ${escape(f.label)} <span>${escape(f.count ?? 0)}</span>
+          </button>
+        `).join("")}
+      </div>
+    </div>
   </header>
   <div class="panel-content">
-    ${t?.events?.length ? t.events.map(ev => `
+    ${events.length ? events.map(ev => `
       <div class="terminal-row ${cls(ev.status)}">
         <span class="term-time font-mono">${escape(timeFormat(ev.at))}</span>
         <span class="term-status font-mono ${cls(ev.status)}">${escape(statusText(ev.status))}</span>
@@ -186,8 +241,9 @@ const Terminal = (t) => `
     : ev.detail ? `<p>${escape(ev.detail)}</p>` : ''}
         </div>
       </div>
-    `).join("") : `<div class="empty-state">${icons.empty}<p>No active traces</p></div>`}
+    `).join("") : `<div class="empty-state">${icons.empty}<p>${terminalFilter === "manual" ? "No manual commands" : "No active traces"}</p></div>`}
   </div>`;
+};
 
 const Proof = (p) => `
   <div class="metric-grid">
@@ -291,6 +347,9 @@ function inject(id, data, builder, scroll = false) {
 }
 
 function render(view, proc) {
+  latestView = view;
+  latestProc = proc;
+
   if (!document.getElementById("region-top")) {
     document.getElementById("app-mount").innerHTML = `
       <div id="region-top"></div>
@@ -311,10 +370,10 @@ function render(view, proc) {
   inject("region-top", { title: view.title, subtitle: view.subtitle, topPills: view.topPills, mode: view.mode, modeLabel: view.modeLabel }, TopBar);
   inject("region-chat", view.conversation, Chat, true);
 
-  // Combine view.activeEvent and proc telemetry for the rich center module
-  inject("region-hero", { e: view.activeEvent, p: proc }, () => Activities(view.activeEvent, proc));
+  // Combine view.activeEvent, process telemetry, and reaction forecast for the rich center module.
+  inject("region-hero", { e: view.activeEvent, p: proc, r: view.reactionForecast }, () => Activities(view.activeEvent, proc, view.reactionForecast));
 
-  inject("region-term", view.terminal, Terminal, true);
+  inject("region-term", { terminal: view.terminal, filter: terminalFilter }, () => Terminal(view.terminal), true);
   inject("region-proof", view.proof, Proof);
   inject("region-files", view.fileEdits, Files, true);
   inject("region-attn", view.attention, Attn, true);
@@ -328,37 +387,27 @@ function render(view, proc) {
   }
 }
 
-/* --- Mock Data Fallback --- */
-const getMockView = () => ({
-  title: "OpenClaw Signal Desk", subtitle: "Agent Home", mode: "working", modeLabel: "Working",
-  topPills: [{ label: "Working", status: "working" }, { label: "Gateway ok", status: "ok" }, { label: new Date().toISOString(), status: "active", kind: "timestamp" }],
-  conversation: {
-    title: "OpenClaw Messages", kicker: "Telegram-origin session", messages: [
-      { role: "human", actor: "User", text: "Can you make the progress visible without Task Manager?", at: new Date(Date.now() - 60000).toISOString() },
-      { role: "agent", actor: "Agent", text: "I am adding backend Windows process telemetry and honest ETA confidence.", at: new Date().toISOString() }
-    ]
-  },
-  activeEvent: { status: "running", title: "rclone.exe pid 4242", command: "rclone copy OneDrive:/Desktop/Sample D:/Archives", durationMs: 184000 },
+const emptyView = () => ({
+  title: "OpenClaw Signal Desk",
+  subtitle: "Agent Home",
+  mode: "quiet",
+  modeLabel: "Quiet",
+  topPills: [],
+  conversation: { title: "OpenClaw Messages", kicker: "", messages: [] },
+  activeEvent: null,
   terminal: {
-    title: "PowerShell Transparency", events: [
-      { status: "running", title: "rclone.exe pid 4242", command: "rclone copy OneDrive:/Desktop/Sample D:/Archives", detail: "rate 4.2 MB/s · eta unknown", at: new Date().toISOString() }
-    ]
+    title: "PowerShell Transparency",
+    events: [],
+    manualEvents: [],
+    filters: [
+      { id: "all", label: "All", count: 0 },
+      { id: "manual", label: "Manual", count: 0 },
+    ],
   },
-  proof: { cards: [{ label: "Collectors", value: "8/8 ok", status: "ok" }, { label: "Disk I/O", value: "4.2 MB/s", status: "active" }] },
-  fileEdits: { title: "File Edits", count: 1, items: [{ path: "public/styles.css", added: 2, removed: 1, exactHunks: [{ header: "@@ -1,3 +1,3 @@", lines: [" context", "-old line", "+new line"] }] }] },
-  attention: { title: "Attention", count: 1, items: [{ severity: "notice", title: "BitLocker", reason: "BitLocker is turned off for volume D:" }] },
-  sensors: [{ label: "Proc", value: "1", status: "active" }, { label: "TCP", value: "2", status: "active" }, { label: "Updated", value: new Date().toISOString(), status: "active" }]
-});
-
-const getMockProc = () => ({
-  activities: [
-    {
-      id: "process:4242", status: "running", title: "rclone.exe", pid: 4242, ageMs: 184000,
-      command: "rclone copy OneDrive:/Desktop/Sample D:/Archives",
-      progress: { percent: null, bytesDone: 528482304, rateLabel: "4.2 MB/s", etaLabel: "unknown", confidence: "medium", reason: "Windows exposes the process, TCP ownership, and disk I/O rate, but not a universal final byte total." },
-      network: { establishedConnectionCount: 2, sampleConnections: [{ state: "Established", local: "192.168.1.20:53124", remote: "203.0.113.10:443" }] }
-    }
-  ]
+  proof: { cards: [] },
+  fileEdits: { title: "File Edits", count: 0, items: [] },
+  attention: { title: "Attention", count: 0, items: [] },
+  sensors: []
 });
 
 /* --- Loop --- */
@@ -371,9 +420,18 @@ async function tick() {
     if (!viewRes || !viewRes.ok) throw new Error("View API Offline");
     render(await viewRes.json(), procRes && procRes.ok ? await procRes.json() : null);
   } catch (err) {
-    // Graceful fallback to Mock Data highlighting the new process metrics UI
-    render(getMockView(), getMockProc());
+    render(emptyView(), null);
   }
 }
+
+document.addEventListener("click", (event) => {
+  const filterButton = event.target.closest("[data-term-filter]");
+  if (!filterButton) return;
+  const nextFilter = filterButton.dataset.termFilter || "all";
+  if (nextFilter === terminalFilter) return;
+  terminalFilter = nextFilter;
+  delete stateCache["region-term"];
+  if (latestView) render(latestView, latestProc);
+});
 
 setTimeout(() => { tick(); setInterval(tick, REFRESH_RATE_MS); }, 1000);

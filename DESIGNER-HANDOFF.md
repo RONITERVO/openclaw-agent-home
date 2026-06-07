@@ -23,6 +23,12 @@ Use the process endpoint when designing progress/ETA surfaces:
 http://127.0.0.1:18880/api/processes
 ```
 
+Use the reaction endpoint when designing "what happens next" surfaces:
+
+```text
+http://127.0.0.1:18880/api/reaction
+```
+
 ## View Contract
 
 `/api/view` returns a small JSON object shaped for UI rendering:
@@ -69,6 +75,17 @@ http://127.0.0.1:18880/api/processes
     "count": 0,
     "items": [
       { "severity": "notice", "source": "windows", "title": "BitLocker is off", "reason": "..." }
+    ]
+  },
+  "reactionForecast": {
+    "state": "idle | responding | working | scheduled | waiting-for-user",
+    "label": "Working; next reaction is after current work returns",
+    "confidence": "high | medium | low",
+    "nextKnownAt": "2026-06-07T02:30:00.000Z | null",
+    "nextKnownLabel": "5m | unknown",
+    "knownFutureAvailable": true,
+    "items": [
+      { "kind": "tool-return", "status": "working", "source": "session-trajectory", "title": "bash is running" }
     ]
   },
   "fileEdits": {
@@ -129,6 +146,28 @@ uses.
 The raw endpoint can include local paths, process names, redacted command lines,
 and remote IP addresses. Keep it as operator telemetry, not a public marketing
 dashboard.
+
+## Reaction Forecast Contract
+
+`/api/reaction` and `/api/view.reactionForecast` expose the same backend facts.
+This is not a promise generator. It answers what the PC and OpenClaw state can
+actually know:
+
+- `tool-return`: an OpenClaw trajectory has a tool call without a matching
+  result; the agent can react after that tool returns.
+- `running-task` / `queued-task`: task state says work is running or queued.
+- `process-completion`: Windows process telemetry sees active work; ETA appears
+  only if the activity exposes a trustworthy total.
+- `cron-wake` / `cron-job`: cron exposes a concrete next wake/run timestamp.
+- `heartbeat`: heartbeat interval and last heartbeat imply a next opportunity,
+  but it can still skip.
+- `pending-reply`: the latest stored message is from the human and no newer
+  agent message is stored.
+- `needs-human`: attention state says the next useful reaction depends on the
+  human or an external state change.
+
+Use `knownFutureAvailable`, `nextKnownAt`, and `nextKnownLabel` for countdowns.
+If `nextKnownAt` is `null`, show the label/reason instead of inventing a timer.
 
 ## Design Rules
 
