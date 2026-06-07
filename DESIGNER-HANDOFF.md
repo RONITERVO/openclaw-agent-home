@@ -17,6 +17,12 @@ Use the raw endpoint only for debugging:
 http://127.0.0.1:18880/api/snapshot
 ```
 
+Use the process endpoint when designing progress/ETA surfaces:
+
+```text
+http://127.0.0.1:18880/api/processes
+```
+
 ## View Contract
 
 `/api/view` returns a small JSON object shaped for UI rendering:
@@ -54,7 +60,9 @@ http://127.0.0.1:18880/api/snapshot
   },
   "proof": {
     "cards": [
-      { "label": "Collectors", "value": "7/7 ok", "status": "ok" }
+      { "label": "Collectors", "value": "8/8 ok", "status": "ok" },
+      { "label": "Processes", "value": "0 live", "status": "neutral" },
+      { "label": "Disk I/O", "value": "0 B/s", "status": "neutral" }
     ]
   },
   "attention": {
@@ -84,10 +92,43 @@ http://127.0.0.1:18880/api/snapshot
     ]
   },
   "sensors": [
+    { "label": "Proc", "value": "0", "status": "neutral" },
+    { "label": "TCP", "value": "56", "status": "active" },
     { "label": "Updated", "value": "2026-06-07T02:00:00.000Z", "status": "active" }
   ]
 }
 ```
+
+## Process Progress Contract
+
+`/api/processes` is deliberately backend-first. It exposes what Windows can
+prove without the agent narrating progress:
+
+- redacted process table entries with PID, parent PID, executable, command
+  summary, CPU, memory, handles, threads, and disk I/O rates
+- TCP socket ownership by process from `Get-NetTCPConnection`
+- recent local file activity and file-growth rates under likely workspace,
+  Downloads, Desktop, and archive roots
+- high-level `activities` for likely user-started processes, transfers, builds,
+  and growing output files
+
+Do not invent percent or ETA. Use these fields:
+
+- `activity.progress.bytesDone`
+- `activity.progress.bytesTotal`
+- `activity.progress.rateLabel`
+- `activity.progress.etaLabel`
+- `activity.progress.confidence`
+- `activity.progress.reason`
+
+If `etaSeconds` is `null`, show the rate/evidence and keep ETA visually
+unknown. That is intentional: Windows does not expose universal per-process
+network byte totals or final download size through the standard APIs Agent Home
+uses.
+
+The raw endpoint can include local paths, process names, redacted command lines,
+and remote IP addresses. Keep it as operator telemetry, not a public marketing
+dashboard.
 
 ## Design Rules
 
@@ -116,6 +157,6 @@ Expected result:
 
 - no horizontal overflow
 - no vertical overflow
-- 6 visible panels
-- 7 sensors
+- 5 or more visible panels
+- 9 sensors
 - screenshot at `agent-home-signal-desk-1920-current.png`

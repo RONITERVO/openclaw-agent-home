@@ -10,6 +10,9 @@ Current MVP defaults:
 - Does not render raw tool arguments.
 - Redacts obvious tokens, passwords, bearer strings, API-key-like fields, and email addresses from text summaries.
 - Reads OpenClaw state through local commands and Windows posture through local PowerShell.
+- Reads Windows process transparency through local PowerShell/CIM and
+  `Get-NetTCPConnection`; command lines are redacted before they reach the
+  snapshot.
 
 Do not expose this server directly to a LAN, tailnet, or the public internet.
 The release target should be an authenticated OpenClaw Gateway plugin route.
@@ -21,3 +24,5 @@ Before public release:
 - Add automated redaction tests.
 - Add explicit privacy modes.
 - Document what each mode can show.
+- Add regression tests for process command-line redaction and ETA confidence
+  behavior.

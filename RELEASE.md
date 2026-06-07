@@ -1,5 +1,37 @@
 # Release Notes
 
+## 0.1.1
+
+Backend process transparency release.
+
+### What Ships
+
+- Raw `/api/processes` endpoint for Windows process progress telemetry.
+- `processMonitor` section in `/api/snapshot`.
+- Layout-ready process proof cards and terminal events in `/api/view`.
+- Windows-native evidence sources:
+  - `Win32_Process`
+  - `Win32_PerfFormattedData_PerfProc_Process`
+  - `Get-NetTCPConnection`
+  - bounded local file-growth scans
+- Honest progress model: shows live process/file evidence and rate, but leaves
+  ETA unknown unless a reliable total byte count is available.
+- Plugin route parity for `/api/view` and `/api/processes`.
+
+### Verified
+
+- `npm run snapshot`
+- local foreground file-growth smoke test: active file, byte count, rate, and
+  ETA reason were detected from Windows/local file evidence.
+
+### Known Gaps
+
+- Built-in Windows TCP ownership APIs expose process/socket ownership, not
+  universal per-process network byte totals. Agent Home reports that limitation
+  explicitly instead of inventing percent or ETA.
+- The collector does not install kernel ETW tracing. A future advanced mode
+  could add opt-in ETW/network-byte attribution with stronger privacy warnings.
+
 ## 0.1.0
 
 Agent Home 0.1.0 is a working local MVP plus a native OpenClaw plugin bridge.
