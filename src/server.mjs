@@ -7,6 +7,7 @@ import { readFile } from "node:fs/promises";
 import { extname, join, normalize, resolve } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
+import { collectProcessMonitor } from "./process-monitor.mjs";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const rootDir = resolve(__dirname, "..");
@@ -280,7 +281,7 @@ function parseSecurityAudit(text) {
   return { summary, warnings: warnings.slice(0, 8) };
 }
 
-function buildAttention({ statusJson, tasks, security, windows }) {
+function buildAttention({ statusJson, tasks, security, windows, processMonitor }) {
   const items = [];
 
   if (!statusJson?.gateway?.reachable) {
@@ -357,10 +358,24 @@ function buildAttention({ statusJson, tasks, security, windows }) {
     });
   }
 
+  if (processMonitor?.summary?.activeActivityCount) {
+    const unknownEtaCount = (processMonitor.activities || [])
+      .filter((activity) => activity.progress?.etaSeconds == null && activity.progress?.reason)
+      .length;
+    if (unknownEtaCount) {
+      items.push({
+        severity: "info",
+        source: "process",
+        title: "Process progress is observable",
+        reason: `${processMonitor.summary.activeActivityCount} active process/file signal(s); ETA is marked unknown when Windows does not expose a reliable total.`,
+      });
+    }
+  }
+
   return items.slice(0, 8);
 }
 
-function buildRecentEvents(statusJson, tasks, sessionsJson, security) {
+function buildRecentEvents(statusJson, tasks, sessionsJson, security, processMonitor) {
   const events = [];
   for (const task of tasks.slice(0, 5)) {
     events.push({
@@ -386,6 +401,15 @@ function buildRecentEvents(statusJson, tasks, sessionsJson, security) {
       source: "security",
       title: "Security audit sampled",
       detail: security.summary,
+    });
+  }
+
+  for (const event of processMonitor?.lifecycleEvents || []) {
+    events.push({
+      at: event.at || null,
+      source: "process",
+      title: `${event.name || "process"} ${event.status}`,
+      detail: event.command || `pid ${event.pid}`,
     });
   }
 
@@ -597,6 +621,44 @@ function commandEvent(label, result, outputMax = 220) {
   };
 }
 
+function processMonitorCommandEvent(processMonitor) {
+  const processCollector = processMonitor?.collectors?.processTable || {};
+  const summary = processMonitor?.summary || {};
+  return commandEvent("Process monitor", {
+    ok: Boolean(processMonitor?.available),
+    collector: "processMonitor",
+    command: processCollector.command || "windows process monitor",
+    durationMs: processCollector.durationMs ?? null,
+    endedAt: processMonitor?.generatedAt ? new Date(processMonitor.generatedAt).getTime() : Date.now(),
+    stdout: [
+      `${summary.interestingProcessCount || 0} interesting processes`,
+      `${summary.activeActivityCount || 0} active work signals`,
+      `${summary.establishedTcpConnectionCount || 0} established TCP`,
+      `${summary.totalDiskWriteRate || "0 B/s"} disk write`,
+    ].join(" · "),
+    error: processMonitor?.error || processCollector.error || null,
+  });
+}
+
+function processMonitorEvents(processMonitor) {
+  const activities = Array.isArray(processMonitor?.activities) ? processMonitor.activities : [];
+  return activities.slice(0, 8).map((activity) => ({
+    at: processMonitor.generatedAt || new Date().toISOString(),
+    source: "process",
+    kind: "process-monitor",
+    status: activity.status || "running",
+    title: activity.title || "Observed process activity",
+    command: activity.command || "",
+    detail: compactText([
+      activity.progress?.rateLabel ? `rate ${activity.progress.rateLabel}` : null,
+      activity.progress?.etaLabel ? `eta ${activity.progress.etaLabel}` : null,
+      activity.progress?.reason || null,
+      ...(activity.evidence || []).slice(0, 2),
+    ].filter(Boolean).join(" · "), 260),
+    durationMs: activity.ageMs ?? null,
+  }));
+}
+
 function chooseActiveEvent({ transcript, commandEvents, tasks, attention }) {
   const timeline = [...(transcript.toolEvents || []), ...(commandEvents || [])]
     .sort((a, b) => new Date(a.at || 0).getTime() - new Date(b.at || 0).getTime());
@@ -669,7 +731,8 @@ function buildUiViewModel(snapshot) {
   const collectors = Object.entries(snapshot.collectors || {});
   const okCollectors = collectors.filter(([, value]) => value.ok).length;
   const windows = snapshot.integrations?.windows || {};
-  const terminalEvents = [...(snapshot.transcript?.toolEvents || []), ...(snapshot.commandEvents || [])]
+  const processSummary = snapshot.processMonitor?.summary || {};
+  const terminalEvents = [...processMonitorEvents(snapshot.processMonitor), ...(snapshot.transcript?.toolEvents || []), ...(snapshot.commandEvents || [])]
     .sort((a, b) => new Date(b.at || 0).getTime() - new Date(a.at || 0).getTime())
     .slice(0, 9)
     .map((event) => ({
@@ -687,6 +750,8 @@ function buildUiViewModel(snapshot) {
     ["Tokens", current ? `${numberLabel(current.totalTokens)} / ${numberLabel(current.contextTokens)}` : "unknown", "neutral"],
     ["Collectors", `${okCollectors}/${collectors.length} ok`, okCollectors === collectors.length ? "ok" : "warning"],
     ["Tasks", `${snapshot.taskSummary?.active || 0} live`, snapshot.taskSummary?.active ? "active" : "neutral"],
+    ["Processes", `${processSummary.activeActivityCount || 0} live`, processSummary.activeActivityCount ? "active" : "neutral"],
+    ["Disk I/O", processSummary.totalDiskWriteRate || "0 B/s", processSummary.totalDiskWriteBytesPerSec ? "active" : "neutral"],
     ["Defender", windows.defender?.RealTimeProtectionEnabled === true ? "on" : "unknown", windows.defender?.RealTimeProtectionEnabled === true ? "ok" : "notice"],
     ["Gateway", snapshot.gateway?.latencyMs != null ? `${snapshot.gateway.latencyMs} ms` : snapshot.gateway?.status || "unknown", snapshot.gateway?.status || "unknown"],
   ].map(([label, value, status]) => ({ label, value, status }));
@@ -696,6 +761,8 @@ function buildUiViewModel(snapshot) {
     ["Messages", `${snapshot.transcript?.messages?.length || 0}`, "active"],
     ["Tool Events", `${snapshot.transcript?.toolEvents?.length || 0}`, "active"],
     ["Commands", `${snapshot.commandEvents?.length || 0}`, "active"],
+    ["Proc", `${processSummary.activeActivityCount || 0}`, processSummary.activeActivityCount ? "active" : "neutral"],
+    ["TCP", `${processSummary.establishedTcpConnectionCount || 0}`, processSummary.establishedTcpConnectionCount ? "active" : "neutral"],
     ["Collectors", `${okCollectors}/${collectors.length}`, okCollectors === collectors.length ? "ok" : "warning"],
     ["Context", current?.percentUsed != null ? `${current.percentUsed}%` : "unknown", current?.percentUsed > 80 ? "warning" : "ok"],
     ["Updated", snapshot.generatedAt, "active"],
@@ -999,7 +1066,7 @@ export async function collectSnapshot({ force = false } = {}) {
   if (inFlightSnapshot) return inFlightSnapshot;
 
   inFlightSnapshot = (async () => {
-    const [statusResult, sessionsResult, tasksResult, cronStatusResult, cronListResult, securityResult, windows] = await Promise.all([
+    const [statusResult, sessionsResult, tasksResult, cronStatusResult, cronListResult, securityResult, windows, processMonitor] = await Promise.all([
       runOpenClaw(["status", "--deep", "--json"], { timeoutMs: 18000, collector: "status" }),
       runOpenClaw(["sessions", "--all-agents", "--limit", "50", "--json"], { timeoutMs: 12000, collector: "sessions" }),
       runOpenClaw(["tasks", "list", "--json"], { timeoutMs: 12000, collector: "tasks" }),
@@ -1007,6 +1074,7 @@ export async function collectSnapshot({ force = false } = {}) {
       runOpenClaw(["cron", "list", "--json"], { timeoutMs: 12000, collector: "cronList" }),
       runOpenClaw(["security", "audit", "--deep"], { timeoutMs: 12000, collector: "security" }),
       collectWindowsPosture(),
+      collectProcessMonitor({ rootDir, workspaceDir }),
     ]);
 
     const statusJson = tryJson(statusResult.stdout, {});
@@ -1018,7 +1086,7 @@ export async function collectSnapshot({ force = false } = {}) {
     const tasks = buildTasks(tasksJson);
     const agents = buildAgents(statusJson, sessionsJson, tasksJson, now);
     const focus = chooseFocus(sessionsJson.sessions || [], tasks, now);
-    const attention = buildAttention({ statusJson, tasks, security, windows });
+    const attention = buildAttention({ statusJson, tasks, security, windows, processMonitor });
     const transcript = await collectTranscript(sessionsJson);
     const commandEvents = [
       commandEvent("OpenClaw status", statusResult),
@@ -1028,6 +1096,7 @@ export async function collectSnapshot({ force = false } = {}) {
       commandEvent("Cron list", cronListResult),
       commandEvent("Security audit", securityResult),
       commandEvent("Windows posture", windows),
+      processMonitorCommandEvent(processMonitor),
     ];
     const fileEdits = await collectFileEdits();
     const activeEvent = chooseActiveEvent({ transcript, commandEvents, tasks, attention });
@@ -1065,7 +1134,8 @@ export async function collectSnapshot({ force = false } = {}) {
       transcript,
       commandEvents,
       fileEdits,
-      recentEvents: buildRecentEvents(statusJson, tasks, sessionsJson, security),
+      processMonitor,
+      recentEvents: buildRecentEvents(statusJson, tasks, sessionsJson, security, processMonitor),
       integrations: buildIntegrations(statusJson, cronStatus, cronList, windows),
       collectors: {
         status: { ok: statusResult.ok, error: compactText(statusResult.error || statusResult.stderr, 120) },
@@ -1075,6 +1145,7 @@ export async function collectSnapshot({ force = false } = {}) {
         cronList: { ok: cronListResult.ok, error: compactText(cronListResult.error || cronListResult.stderr, 120) },
         security: { ok: securityResult.ok, error: compactText(securityResult.error || securityResult.stderr, 120) },
         windows: { ok: Boolean(windows?.available), error: windows?.error || null },
+        processMonitor: { ok: Boolean(processMonitor?.available), error: processMonitor?.error || processMonitor?.collectors?.processTable?.error || null },
       },
     };
     snapshot.ui = buildUiViewModel(snapshot);
@@ -1136,6 +1207,16 @@ async function handleRequest(request, response) {
         "cache-control": "no-store",
       });
       response.end(JSON.stringify(snapshot.ui, null, 2));
+      return;
+    }
+
+    if (url.pathname === "/api/processes") {
+      const snapshot = await collectSnapshot({ force: url.searchParams.get("force") === "1" });
+      response.writeHead(200, {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+      });
+      response.end(JSON.stringify(snapshot.processMonitor || { available: false }, null, 2));
       return;
     }
 

@@ -71,6 +71,40 @@ http://127.0.0.1:18880/api/view
 http://127.0.0.1:18880/api/snapshot
 ```
 
+**Windows process transparency:**
+
+```text
+http://127.0.0.1:18880/api/processes
+```
+
+`/api/processes` is the backend-first progress contract for process visibility.
+It does not require the agent to pass progress facts. On Windows it samples what
+the PC can actually expose:
+
+- `Win32_Process` for PID, parent PID, executable, creation time, and redacted
+  command line
+- `Win32_PerfFormattedData_PerfProc_Process` for CPU, memory, handles, threads,
+  and per-process disk/file I/O rates
+- `Get-NetTCPConnection` for TCP connection ownership by process
+- bounded local file-growth scans under likely workspace/download/archive roots
+  and any extra roots listed in `AGENT_HOME_PROGRESS_ROOTS`
+
+The response separates broad evidence from progress claims:
+
+- `processMonitor.processes` keeps a redacted, scored list of interesting
+  Windows processes.
+- `processMonitor.network.byProcess` shows owned TCP sockets and connection
+  states.
+- `processMonitor.fileActivity` shows recently changed or growing local files.
+- `processMonitor.activities` is the high-level progress lane for likely
+  user-started work, transfers, builds, and growing outputs.
+- `progress.etaSeconds` is `null` unless a trustworthy total byte count is
+  inferable. When ETA is unknown, `progress.reason` says why instead of guessing.
+
+This means Agent Home can show “rclone is alive, owns these TCP connections,
+writes 4.2 MB/s to this growing file, ETA unknown because Windows does not
+expose the final total” without asking the agent to narrate progress.
+
 The snapshot currently collects:
 
 - `openclaw status --deep --json`
@@ -80,6 +114,7 @@ The snapshot currently collects:
 - `openclaw cron list --json`
 - `openclaw security audit --deep`
 - Windows posture when available
+- Windows process transparency and local file-growth progress signals
 - the latest OpenClaw session transcript JSONL
 - the latest OpenClaw trajectory JSONL for tool/command events
 - Git workspace status/diff for `agent-home`

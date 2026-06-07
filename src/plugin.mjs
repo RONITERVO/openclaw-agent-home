@@ -43,6 +43,18 @@ async function serveAgentHomeRoute(request, response) {
     return true;
   }
 
+  if (url.pathname === `${routeBase}/api/view`) {
+    const snapshot = await collectSnapshot({ force: url.searchParams.get("force") === "1" });
+    sendJson(response, 200, snapshot.ui);
+    return true;
+  }
+
+  if (url.pathname === `${routeBase}/api/processes`) {
+    const snapshot = await collectSnapshot({ force: url.searchParams.get("force") === "1" });
+    sendJson(response, 200, snapshot.processMonitor || { available: false });
+    return true;
+  }
+
   if (url.pathname === `${routeBase}/api/health`) {
     sendJson(response, 200, { ok: true });
     return true;

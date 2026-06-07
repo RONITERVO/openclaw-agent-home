@@ -21,6 +21,8 @@ The display may show:
 - task/subagent status and short redacted summaries
 - cron/heartbeat status
 - high-level Windows posture, when available
+- process progress summaries, owned TCP socket counts, local file-growth rates,
+  and redacted command lines in ambient-safe form
 
 ## Local-Only MVP
 
@@ -47,3 +49,8 @@ The backend performs basic string redaction before snapshot text reaches the
 browser. Redaction is a guardrail, not a license to send sensitive content to
 the display. New collectors should prefer structured, privacy-safe fields over
 redacting large raw blobs after the fact.
+
+The raw `/api/processes` endpoint is more detailed than the ambient display. It
+can include local paths, process names, redacted command lines, remote IP
+addresses, and recently changed file paths. Keep it behind local/Gateway auth
+and treat it as operator telemetry, not public dashboard data.
