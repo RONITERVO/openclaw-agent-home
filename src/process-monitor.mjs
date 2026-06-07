@@ -32,6 +32,9 @@ const noisyDirectories = new Set([
   ".venv",
   "venv",
   "__pycache__",
+  ".edge-cdp-profile",
+  ".edge-shot-profile",
+  ".edge-verify-profile",
   "AppData",
   "$RECYCLE.BIN",
   "System Volume Information",
@@ -667,7 +670,7 @@ export async function collectProcessMonitor({ rootDir = process.cwd(), workspace
       roots: scanRootsFromEnvironment({ rootDir, workspaceDir, processes: interestingProcesses }),
       recentFiles,
       growingFiles: recentFiles
-        .filter((file) => file.partial || Number(file.growthBytesPerSec) > 0)
+        .filter(isActiveFileSignal)
         .slice(0, 30),
     },
     lifecycleEvents: lifecycleEvents.slice(-20),
