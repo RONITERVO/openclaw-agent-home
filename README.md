@@ -14,7 +14,7 @@ This is the first local vertical slice. It is intentionally dependency-free:
 - Browser UI renders one layout-ready view model from `/api/view`.
 - Subagent/task relationships are derived from session and task metadata.
 - No transcript bodies, tokens, raw tool args, or secrets are shown in ambient mode.
-- No clicks, scrolling, forms, tabs, menus, or visible controls required.
+- No clicks, forms, tabs, or menus required; the trace panel has one compact optional filter.
 - **Truthful UI Fallback:** if the backend is offline, the frontend renders empty telemetry shells instead of invented agent/process data.
 
 ## Purpose
@@ -25,6 +25,7 @@ OpenClaw Control can already provide the deeper operator surface: chats, setting
 - surface only the top few attention signals
 - show recent Telegram/OpenClaw session messages in compact ambient form
 - show tool calls, PowerShell commands, status, duration, and trimmed output
+- filter the trace panel down to manually invoked agent tool commands when collector noise is distracting
 - show file edit state for designers: changed paths, line counts, raw patch text, and Git hunks when a baseline exists
 - show local safety posture that matters on an always-visible screen
 - show verification, jobs, collector flow, and local sensor state in one frame

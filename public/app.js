@@ -3,6 +3,9 @@
 
 const REFRESH_RATE_MS = 3000;
 let stateCache = {};
+let terminalFilter = "all";
+let latestView = null;
+let latestProc = null;
 
 /* --- Utils & Formatters --- */
 const cls = (v) => String(v || "unknown").toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
@@ -205,13 +208,29 @@ const Activities = (activeEv, proc, forecast) => {
   return `<div class="activities-stack">${ReactionForecast(forecast)}${processCards || fallbackCard}</div>`;
 };
 
-const Terminal = (t) => `
-  <header class="panel-header">
+const Terminal = (t) => {
+  const filters = t?.filters?.length ? t.filters : [
+    { id: "all", label: "All", count: t?.events?.length || 0 },
+    { id: "manual", label: "Manual", count: t?.manualEvents?.length || 0 },
+  ];
+  const events = terminalFilter === "manual" ? (t?.manualEvents || []) : (t?.events || []);
+
+  return `
+  <header class="panel-header terminal-header">
     <h2>${escape(t?.title || "Execution Trace")}</h2>
-    <span class="font-mono">${escape(t?.kicker || "Monitoring")}</span>
+    <div class="terminal-header-tools">
+      <span class="font-mono">${escape(t?.kicker || "Monitoring")}</span>
+      <div class="terminal-filter font-mono" aria-label="Trace filter">
+        ${filters.map(f => `
+          <button type="button" class="${terminalFilter === f.id ? "active" : ""}" data-term-filter="${escape(f.id)}" aria-pressed="${terminalFilter === f.id}">
+            ${escape(f.label)} <span>${escape(f.count ?? 0)}</span>
+          </button>
+        `).join("")}
+      </div>
+    </div>
   </header>
   <div class="panel-content">
-    ${t?.events?.length ? t.events.map(ev => `
+    ${events.length ? events.map(ev => `
       <div class="terminal-row ${cls(ev.status)}">
         <span class="term-time font-mono">${escape(timeFormat(ev.at))}</span>
         <span class="term-status font-mono ${cls(ev.status)}">${escape(statusText(ev.status))}</span>
@@ -222,8 +241,9 @@ const Terminal = (t) => `
     : ev.detail ? `<p>${escape(ev.detail)}</p>` : ''}
         </div>
       </div>
-    `).join("") : `<div class="empty-state">${icons.empty}<p>No active traces</p></div>`}
+    `).join("") : `<div class="empty-state">${icons.empty}<p>${terminalFilter === "manual" ? "No manual commands" : "No active traces"}</p></div>`}
   </div>`;
+};
 
 const Proof = (p) => `
   <div class="metric-grid">
@@ -327,6 +347,9 @@ function inject(id, data, builder, scroll = false) {
 }
 
 function render(view, proc) {
+  latestView = view;
+  latestProc = proc;
+
   if (!document.getElementById("region-top")) {
     document.getElementById("app-mount").innerHTML = `
       <div id="region-top"></div>
@@ -350,7 +373,7 @@ function render(view, proc) {
   // Combine view.activeEvent, process telemetry, and reaction forecast for the rich center module.
   inject("region-hero", { e: view.activeEvent, p: proc, r: view.reactionForecast }, () => Activities(view.activeEvent, proc, view.reactionForecast));
 
-  inject("region-term", view.terminal, Terminal, true);
+  inject("region-term", { terminal: view.terminal, filter: terminalFilter }, () => Terminal(view.terminal), true);
   inject("region-proof", view.proof, Proof);
   inject("region-files", view.fileEdits, Files, true);
   inject("region-attn", view.attention, Attn, true);
@@ -372,7 +395,15 @@ const emptyView = () => ({
   topPills: [],
   conversation: { title: "OpenClaw Messages", kicker: "", messages: [] },
   activeEvent: null,
-  terminal: { title: "PowerShell Transparency", events: [] },
+  terminal: {
+    title: "PowerShell Transparency",
+    events: [],
+    manualEvents: [],
+    filters: [
+      { id: "all", label: "All", count: 0 },
+      { id: "manual", label: "Manual", count: 0 },
+    ],
+  },
   proof: { cards: [] },
   fileEdits: { title: "File Edits", count: 0, items: [] },
   attention: { title: "Attention", count: 0, items: [] },
@@ -392,5 +423,15 @@ async function tick() {
     render(emptyView(), null);
   }
 }
+
+document.addEventListener("click", (event) => {
+  const filterButton = event.target.closest("[data-term-filter]");
+  if (!filterButton) return;
+  const nextFilter = filterButton.dataset.termFilter || "all";
+  if (nextFilter === terminalFilter) return;
+  terminalFilter = nextFilter;
+  delete stateCache["region-term"];
+  if (latestView) render(latestView, latestProc);
+});
 
 setTimeout(() => { tick(); setInterval(tick, REFRESH_RATE_MS); }, 1000);

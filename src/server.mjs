@@ -1051,6 +1051,24 @@ function flattenSessions(snapshot) {
     .sort((a, b) => Number(a.session.updatedAgeMs ?? 0) - Number(b.session.updatedAgeMs ?? 0));
 }
 
+function isManualTerminalEvent(event) {
+  return event?.source === "trajectory" || event?.source === "tool";
+}
+
+function terminalEventView(event) {
+  return {
+    at: event.at || null,
+    status: event.status || "unknown",
+    title: event.title || event.kind || "event",
+    command: event.command || event.kind || "",
+    detail: event.detail || "",
+    durationMs: event.durationMs ?? null,
+    source: event.source || "openclaw",
+    kind: event.kind || "event",
+    isManual: isManualTerminalEvent(event),
+  };
+}
+
 function buildUiViewModel(snapshot) {
   const mode = currentMode(snapshot);
   const channel = snapshot.integrations?.channels?.[0] || null;
@@ -1060,18 +1078,10 @@ function buildUiViewModel(snapshot) {
   const okCollectors = collectors.filter(([, value]) => value.ok).length;
   const windows = snapshot.integrations?.windows || {};
   const processSummary = snapshot.processMonitor?.summary || {};
-  const terminalEvents = [...processMonitorEvents(snapshot.processMonitor), ...(snapshot.transcript?.toolEvents || []), ...(snapshot.commandEvents || [])]
-    .sort((a, b) => new Date(b.at || 0).getTime() - new Date(a.at || 0).getTime())
-    .slice(0, 9)
-    .map((event) => ({
-      at: event.at || null,
-      status: event.status || "unknown",
-      title: event.title || event.kind || "event",
-      command: event.command || event.kind || "",
-      detail: event.detail || "",
-      durationMs: event.durationMs ?? null,
-      source: event.source || "openclaw",
-    }));
+  const allTerminalEvents = [...processMonitorEvents(snapshot.processMonitor), ...(snapshot.transcript?.toolEvents || []), ...(snapshot.commandEvents || [])]
+    .sort((a, b) => new Date(b.at || 0).getTime() - new Date(a.at || 0).getTime());
+  const terminalEvents = allTerminalEvents.slice(0, 9).map(terminalEventView);
+  const manualTerminalEvents = allTerminalEvents.filter(isManualTerminalEvent).slice(0, 9).map(terminalEventView);
 
   const proofCards = [
     ["Context", current?.percentUsed != null ? `${current.percentUsed}% used` : "unknown", current?.percentUsed > 80 ? "warning" : "ok"],
@@ -1128,6 +1138,11 @@ function buildUiViewModel(snapshot) {
       title: "PowerShell / Tool Transparency",
       kicker: "calls, status, output",
       events: terminalEvents,
+      manualEvents: manualTerminalEvents,
+      filters: [
+        { id: "all", label: "All", count: terminalEvents.length },
+        { id: "manual", label: "Manual", count: manualTerminalEvents.length },
+      ],
     },
     proof: {
       title: "Proof",
