@@ -1,0 +1,24 @@
+{
+  "name": "openclaw-agent-home",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Zero-click ambient second-screen status display for OpenClaw agents.",
+  "openclaw": {
+    "extensions": [
+      "./src/plugin.mjs"
+    ],
+    "compat": {
+      "pluginApi": ">=2026.6.1",
+      "minGatewayVersion": "2026.6.1"
+    }
+  },
+  "scripts": {
+    "start": "node src/server.mjs",
+    "snapshot": "node src/server.mjs --snapshot",
+    "verify:win": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/Verify-AgentHome.ps1"
+  },
+  "engines": {
+    "node": ">=22.19"
+  }
+}
