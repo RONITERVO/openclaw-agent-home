@@ -1,3 +1,6 @@
+# Copyright 2026 Roni Tervo
+# SPDX-License-Identifier: Apache-2.0
+
 param(
   [int]$Port = 18880,
   [switch]$Fullscreen

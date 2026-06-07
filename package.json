@@ -2,6 +2,7 @@
   "name": "openclaw-agent-home",
   "version": "0.1.0",
   "private": true,
+  "license": "Apache-2.0",
   "type": "module",
   "description": "Zero-click ambient second-screen status display for OpenClaw agents.",
   "openclaw": {

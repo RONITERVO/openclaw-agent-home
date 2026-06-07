@@ -1,3 +1,6 @@
+// Copyright 2026 Roni Tervo
+// SPDX-License-Identifier: Apache-2.0
+
 const REFRESH_RATE_MS = 3000;
 let stateCache = {};
 
