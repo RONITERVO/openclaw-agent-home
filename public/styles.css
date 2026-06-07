@@ -533,6 +533,64 @@ body {
   box-shadow: 0 0 20px var(--green);
 }
 
+.next-reaction {
+  padding: 14px 16px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 14px;
+  background: rgba(0, 0, 0, 0.22);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.next-reaction.working,
+.next-reaction.responding {
+  border-color: rgba(34, 211, 238, 0.28);
+  background: rgba(34, 211, 238, 0.06);
+}
+
+.next-reaction.waiting-for-user,
+.next-reaction.needs-you {
+  border-color: rgba(245, 158, 11, 0.28);
+  background: rgba(245, 158, 11, 0.07);
+}
+
+.next-reaction-top,
+.next-reaction-main {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: baseline;
+}
+
+.next-reaction-top {
+  margin-bottom: 8px;
+  color: var(--text-dim);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.next-reaction-main strong {
+  min-width: 0;
+  color: var(--text-main);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.next-reaction-main span {
+  flex: 0 0 auto;
+  color: var(--cyan);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.next-reaction p {
+  margin-top: 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .act-head {
   display: flex;
   justify-content: space-between;
@@ -1113,5 +1171,47 @@ body {
 
   .panel.proof {
     min-height: auto;
+  }
+}
+
+@media (max-width: 768px) {
+  .dashboard {
+    padding: 16px;
+  }
+
+  .topbar {
+    gap: 12px;
+    overflow: hidden;
+  }
+
+  .identity {
+    min-width: 0;
+  }
+
+  .identity-text h1,
+  .identity-text p {
+    white-space: normal;
+  }
+
+  .top-pills {
+    min-width: 0;
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+
+  .pill {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+
+  .next-reaction-main,
+  .next-reaction-top {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .progress-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }

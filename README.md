@@ -15,7 +15,7 @@ This is the first local vertical slice. It is intentionally dependency-free:
 - Subagent/task relationships are derived from session and task metadata.
 - No transcript bodies, tokens, raw tool args, or secrets are shown in ambient mode.
 - No clicks, scrolling, forms, tabs, menus, or visible controls required.
-- **Graceful UI Fallback:** The frontend includes a mock-data engine, allowing designers to iterate on the UI layout and CSS without needing a live backend or OpenClaw instance.
+- **Truthful UI Fallback:** if the backend is offline, the frontend renders empty telemetry shells instead of invented agent/process data.
 
 ## Purpose
 
@@ -63,7 +63,7 @@ npm run snapshot
 http://127.0.0.1:18880/api/view
 ```
 
-*(Note: If the API is offline, the frontend will automatically render a high-fidelity mock state to allow continuous UI development).*
+*(Note: If the API is offline, the frontend renders empty telemetry panels. It does not invent transcript, process, or reaction data.)*
 
 **Raw collector data:**
 
