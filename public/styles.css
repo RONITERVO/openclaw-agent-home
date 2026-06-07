@@ -562,8 +562,8 @@ body {
 
 .activity-card.running::before,
 .activity-card.working::before {
-  background: var(--cyan);
-  box-shadow: 0 0 20px var(--cyan);
+  background: #ffffff;
+  box-shadow: 0 0 20px #b7b1c9;
 }
 
 .activity-card.warning::before,
@@ -574,8 +574,8 @@ body {
 
 .activity-card.done::before,
 .activity-card.ok::before {
-  background: var(--green);
-  box-shadow: 0 0 20px var(--green);
+  background: var(--green-bg);
+  box-shadow: 0 0 20px var(--green-bg);
 }
 
 .next-reaction {
@@ -624,7 +624,7 @@ body {
 
 .next-reaction-main span {
   flex: 0 0 auto;
-  color: var(--cyan);
+  color: #8a8a8a;
   font-size: 10px;
   text-transform: uppercase;
 }
