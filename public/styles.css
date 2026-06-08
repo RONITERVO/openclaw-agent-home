@@ -594,6 +594,153 @@ body {
   box-shadow: 0 0 20px var(--green-bg);
 }
 
+.goal-progress {
+  padding: 14px 16px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  background: rgba(24, 24, 28, 0.72);
+  min-width: 0;
+}
+
+.goal-progress.ahead,
+.goal-progress.on-track,
+.goal-progress.done {
+  border-color: rgba(16, 185, 129, 0.22);
+}
+
+.goal-progress.behind,
+.goal-progress.late,
+.goal-progress.warning {
+  border-color: rgba(245, 158, 11, 0.32);
+}
+
+.goal-main {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+  margin-bottom: 10px;
+}
+
+.goal-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.goal-kicker {
+  color: var(--text-dim);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+}
+
+.goal-copy strong {
+  color: var(--text-main);
+  font-size: 14px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.goal-copy span {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.goal-percent {
+  flex: 0 0 auto;
+  color: var(--cyan);
+  font-size: 26px;
+  line-height: 1;
+}
+
+.goal-progress.ahead .goal-percent,
+.goal-progress.on-track .goal-percent,
+.goal-progress.done .goal-percent {
+  color: var(--green);
+}
+
+.goal-progress.behind .goal-percent,
+.goal-progress.late .goal-percent,
+.goal-progress.warning .goal-percent {
+  color: var(--yellow);
+}
+
+.goal-track {
+  position: relative;
+  height: 7px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  overflow: hidden;
+}
+
+.goal-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--cyan);
+  box-shadow: 0 0 12px var(--cyan-glow);
+  transition: width 0.3s ease;
+}
+
+.goal-progress.ahead .goal-fill,
+.goal-progress.on-track .goal-fill,
+.goal-progress.done .goal-fill {
+  background: var(--green);
+  box-shadow: 0 0 12px var(--green-glow);
+}
+
+.goal-progress.behind .goal-fill,
+.goal-progress.late .goal-fill,
+.goal-progress.warning .goal-fill {
+  background: var(--yellow);
+  box-shadow: none;
+}
+
+.goal-expected {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 2px;
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: 0 0 10px rgba(255, 255, 255, 0.22);
+}
+
+.goal-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.goal-metrics div {
+  min-width: 0;
+}
+
+.goal-metrics span {
+  display: block;
+  color: var(--text-dim);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.goal-metrics strong {
+  display: block;
+  color: var(--text-main);
+  font-size: 11px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .next-reaction {
   padding: 0 2px 2px;
   border: 0;
@@ -1006,8 +1153,19 @@ body {
   color: var(--cyan);
 }
 
+.metric.ahead strong,
+.metric.on-track strong,
+.metric.done strong {
+  color: var(--green);
+}
+
 .metric.warning strong {
   color: var(--red);
+}
+
+.metric.behind strong,
+.metric.late strong {
+  color: var(--yellow);
 }
 
 /* Right - File Edits (Diff Viewer) */
@@ -1180,11 +1338,15 @@ body {
 }
 
 .sensor.active strong,
-.sensor.working strong {
+.sensor.working strong,
+.sensor.ahead strong,
+.sensor.on-track strong {
   color: var(--cyan);
 }
 
-.sensor.warning strong {
+.sensor.warning strong,
+.sensor.behind strong,
+.sensor.late strong {
   color: var(--red);
 }
 
@@ -1271,13 +1433,15 @@ body {
   }
 
   .next-reaction-main,
-  .next-reaction-top {
+  .next-reaction-top,
+  .goal-main {
     align-items: flex-start;
     flex-direction: column;
     gap: 4px;
   }
 
-  .progress-metrics {
+  .progress-metrics,
+  .goal-metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 

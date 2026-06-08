@@ -30,6 +30,8 @@ const formatBytes = (bytes) => {
 const statusText = (s) => {
   if (["done", "ok", "clean", "quiet", "idle"].includes(s)) return "OK";
   if (["scheduled"].includes(s)) return "DUE";
+  if (["ahead", "on-track"].includes(s)) return "OK";
+  if (["behind", "late"].includes(s)) return "LAG";
   if (["needs-you", "waiting-for-user"].includes(s)) return "YOU";
   if (["failed", "warning", "urgent"].includes(s)) return "ERR";
   if (["running", "working", "active", "responding"].includes(s)) return "RUN";
@@ -127,8 +129,44 @@ const ReactionForecast = (forecast) => {
     </div>`;
 };
 
+const GoalProgress = (goal) => {
+  if (!goal || !goal.enabled) return "";
+  const actual = Math.max(0, Math.min(100, Number(goal.progressPercent) || 0));
+  const expected = Math.max(0, Math.min(100, Number(goal.expectedPercent) || 0));
+  const metrics = goal.metrics?.length ? goal.metrics : [
+    { label: "Now", value: goal.currentLabel || "" },
+    { label: "Target", value: goal.targetLabel || "" },
+    { label: "Need", value: goal.requiredPaceLabel || "" },
+    { label: "Finish", value: goal.finishLabel || "" },
+  ];
+
+  return `
+    <div class="goal-progress ${cls(goal.status)}">
+      <div class="goal-main">
+        <div class="goal-copy">
+          <div class="goal-kicker font-mono">GOAL // ${escape(statusText(goal.status))}</div>
+          <strong>${escape(shortText(goal.title || "Goal", 96))}</strong>
+          <span>${escape(shortText(goal.insight || goal.description || "", 150))}</span>
+        </div>
+        <div class="goal-percent font-mono">${escape(actual)}%</div>
+      </div>
+      <div class="goal-track" aria-label="Goal progress">
+        <div class="goal-fill" style="width: ${actual}%"></div>
+        <div class="goal-expected" style="left: ${expected}%"></div>
+      </div>
+      <div class="goal-metrics font-mono">
+        ${metrics.slice(0, 4).map(m => `
+          <div>
+            <span>${escape(m.label)}</span>
+            <strong>${escape(m.value)}</strong>
+          </div>
+        `).join("")}
+      </div>
+    </div>`;
+};
+
 // Renders deep process metrics exposing backend telemetry cleanly without inventing data.
-const Activities = (activeEv, proc, forecast) => {
+const Activities = (activeEv, proc, forecast, goal) => {
   const processCards = (proc?.activities || []).map(act => {
     const prog = act.progress || {};
     const percent = Number(prog.percent);
@@ -206,7 +244,7 @@ const Activities = (activeEv, proc, forecast) => {
       <p style="font-size:14px; color:var(--text-muted); line-height:1.6;">${escape(activeEv.detail || "Operating within standard parameters.")}</p>
     </div>` : `<div class="empty-state">${icons.empty}<p>System Idle</p></div>`;
 
-  return `<div class="activities-stack">${ReactionForecast(forecast)}${processCards || fallbackCard}</div>`;
+  return `<div class="activities-stack">${GoalProgress(goal)}${ReactionForecast(forecast)}${processCards || fallbackCard}</div>`;
 };
 
 const Terminal = (t) => {
@@ -372,7 +410,7 @@ function render(view, proc) {
   inject("region-chat", view.conversation, Chat, true);
 
   // Combine view.activeEvent, process telemetry, and reaction forecast for the rich center module.
-  inject("region-hero", { e: view.activeEvent, p: proc, r: view.reactionForecast }, () => Activities(view.activeEvent, proc, view.reactionForecast));
+  inject("region-hero", { e: view.activeEvent, p: proc, r: view.reactionForecast, g: view.goal }, () => Activities(view.activeEvent, proc, view.reactionForecast, view.goal));
 
   inject("region-term", { terminal: view.terminal, filter: terminalFilter }, () => Terminal(view.terminal), true);
   inject("region-proof", view.proof, Proof);
@@ -396,6 +434,7 @@ const emptyView = () => ({
   topPills: [],
   conversation: { title: "OpenClaw Messages", kicker: "", messages: [] },
   activeEvent: null,
+  goal: null,
   terminal: {
     title: "PowerShell Transparency",
     events: [],

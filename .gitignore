@@ -3,6 +3,7 @@ node_modules/
 npm-debug.log*
 designer-handoff/
 agent-home-designer-handoff.zip
+goal.local.json
 
 # Keep screenshots intentional. Commit selected proof images by force-adding them
 # or moving them into docs/assets when the release repo layout is decided.
