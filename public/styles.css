@@ -490,6 +490,7 @@ body {
   align-items: center;
   gap: 10px;
   margin-bottom: 10px;
+  min-width: 0;
 }
 
 .chat-meta strong {
@@ -497,6 +498,10 @@ body {
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chat-meta svg {
@@ -510,10 +515,21 @@ body {
   color: var(--cyan);
 }
 
+.chat-channel {
+  margin-left: auto;
+  padding: 2px 6px;
+  border: 1px solid var(--border-subtle);
+  color: var(--text-dim);
+  font-size: 10px;
+  line-height: 1;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
 .chat-meta .time {
   font-size: 11px;
   color: var(--text-dim);
-  margin-left: auto;
+  white-space: nowrap;
 }
 
 .chat-row p {

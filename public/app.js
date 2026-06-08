@@ -92,6 +92,7 @@ const Chat = (c) => `
         <div class="chat-meta">
           ${m.role === 'human' ? icons.user : icons.brand}
           <strong>${escape(m.actor || m.role)}</strong>
+          <span class="chat-channel font-mono ${cls(m.channel)}">${escape(m.channel || (m.role === "agent" ? "agent" : "openclaw"))}</span>
           <span class="time font-mono">${escape(timeFormat(m.at))}</span>
         </div>
         <p>${escape(m.text)}</p>

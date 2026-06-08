@@ -4,9 +4,9 @@ Zero-click ambient second-screen display for OpenClaw agents.
 
 Agent Home is meant to live beside the existing OpenClaw Control UI, not replace it. Control UI is the interactive cockpit at `http://127.0.0.1:18789/`. Agent Home is the room display: a full-screen, no-scroll, privacy-safe answer to whether the agent is working, waiting, or needs the human.
 
-It should show more than a chat app can show. Telegram shows the conversation. Agent Home shows the operating context around the conversation: context pressure, agent/subagent topology, gateway posture, collector health, local machine posture, heartbeat/cron state, and the current attention queue.
+It should show more than a chat app can show. A single transport only sees its own delivery path. Agent Home shows the local OpenClaw conversation and operating context around it: source channel coverage, context pressure, agent/subagent topology, gateway posture, collector health, local machine posture, heartbeat/cron state, and the current attention queue.
 
-The current visual model is a **Signal Desk**: a PC-native, bento-box-style chat-and-command surface for OpenClaw. It reads the local session store, shows Telegram-origin messages and OpenClaw replies, turns tool/PowerShell activity into one active event, and keeps collector proof visible without needing clicks or scroll.
+The current visual model is a **Signal Desk**: a PC-native, bento-box-style chat-and-command surface for OpenClaw. It reads the local session store, merges recent user-facing messages across source channels, turns tool/PowerShell activity into one active event, and keeps collector proof visible without needing clicks or scroll.
 
 This is the first local vertical slice. It is intentionally dependency-free:
 
@@ -23,7 +23,7 @@ OpenClaw Control can already provide the deeper operator surface: chats, setting
 
 - show the current agent posture as `Quiet`, `Working`, or `Needs You`
 - surface only the top few attention signals
-- show recent Telegram/OpenClaw session messages in compact ambient form
+- show recent OpenClaw session messages across source channels in compact ambient form
 - show tool calls, PowerShell commands, status, duration, and trimmed output
 - filter the trace panel down to manually invoked agent tool commands when collector noise is distracting
 - show file edit state for designers: changed paths, line counts, raw patch text, and Git hunks when a baseline exists
@@ -93,7 +93,7 @@ derives an honest forecast from local OpenClaw and Windows facts:
 - process-monitor activities and any trustworthy ETA they expose
 - cron next-wake timestamps
 - heartbeat intervals and the last heartbeat timestamp
-- pending human-message state from the stored transcript
+- pending human-message state from the unified local transcript
 
 The response separates active work from scheduled opportunities. It reports
 `nextKnownAt` only when a trustworthy timestamp exists; otherwise it says why
@@ -138,10 +138,10 @@ The snapshot currently collects:
 - `openclaw security audit --deep`
 - Windows posture when available
 - Windows process transparency and local file-growth progress signals
-- reaction forecast from trajectory, tasks, cron, heartbeat, transcript, and
+- reaction forecast from trajectory, tasks, cron, heartbeat, unified transcript, and
   process evidence
-- the latest OpenClaw session transcript JSONL
-- the latest OpenClaw trajectory JSONL for tool/command events
+- recent OpenClaw session transcript JSONL artifacts merged by timestamp
+- recent OpenClaw trajectory JSONL artifacts for tool/command events
 - Git workspace status/diff for `agent-home`
 
 The existing Control UI/Gateway can eventually replace the subprocess adapter with authenticated Gateway route/RPC data for the same categories: gateway health, channel state, sessions, tasks/subagents, cron, node status, plugin health, memory/heartbeat status, reaction forecast, and model/provider status.
