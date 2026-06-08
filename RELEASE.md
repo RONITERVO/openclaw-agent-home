@@ -16,7 +16,7 @@ Backend reaction forecast release.
   - process-monitor activity and trustworthy process ETA when available
   - cron next wake/job timestamps
   - heartbeat interval plus last heartbeat timestamp
-  - pending human-message state from the transcript
+  - pending human-message state from the unified local transcript
   - attention blockers that mean the agent is waiting for the human
 - Honest forecast model: exposes `nextKnownAt` only for a trustworthy timestamp
   and otherwise explains why the future is unknown.

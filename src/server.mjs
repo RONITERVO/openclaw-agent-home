@@ -15,6 +15,8 @@ const workspaceDir = resolve(rootDir, "..");
 const publicDir = join(rootDir, "public");
 const port = Number(process.env.AGENT_HOME_PORT || 18880);
 const isWindows = process.platform === "win32";
+const transcriptSessionLimit = envInt("AGENT_HOME_TRANSCRIPT_SESSION_LIMIT", 8);
+const transcriptMessageLimit = envInt("AGENT_HOME_TRANSCRIPT_MESSAGE_LIMIT", 9);
 
 const contentTypes = new Map([
   [".html", "text/html; charset=utf-8"],
@@ -34,6 +36,11 @@ const redactPatterns = [
 let cachedSnapshot = null;
 let cachedAt = 0;
 let inFlightSnapshot = null;
+
+function envInt(name, fallback) {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
+}
 
 function runFile(file, args, { timeoutMs = 12000, displayCommand = null, collector = null, cwd = null } = {}) {
   return new Promise((resolveRun) => {
@@ -769,6 +776,24 @@ function latestSession(sessionsJson) {
   return [...sessions].sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0))[0] || null;
 }
 
+function transcriptSessionCandidates(sessionsJson) {
+  const sessions = Array.isArray(sessionsJson?.sessions) ? sessionsJson.sessions : [];
+  return [...sessions]
+    .filter((session) => session?.agentId && session?.sessionId)
+    .sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0))
+    .slice(0, transcriptSessionLimit);
+}
+
+function inferSessionChannel(session) {
+  if (!session) return "openclaw";
+  if (session.sourceChannel) return session.sourceChannel;
+  if (session.kind === "spawn-child") return "subagent";
+  const keyParts = String(session.key || "").split(":").filter(Boolean);
+  const directIndex = keyParts.indexOf("direct");
+  if (directIndex > 1) return keyParts[directIndex - 1] || "openclaw";
+  return "openclaw";
+}
+
 function sessionArtifactPath(session, suffix) {
   if (!session?.agentId || !session?.sessionId) return null;
   return join(homedir(), ".openclaw", "agents", session.agentId, "sessions", `${session.sessionId}${suffix}`);
@@ -808,7 +833,16 @@ function compactValue(value, max = 180) {
   return compactText(JSON.stringify(value), max);
 }
 
-function toolCommandFromMessage(message) {
+function sessionEventFields(session) {
+  return {
+    sessionKey: session?.key || null,
+    sessionId: session?.sessionId || null,
+    sessionKind: session?.kind || null,
+    sessionChannel: inferSessionChannel(session),
+  };
+}
+
+function toolCommandFromMessage(message, session) {
   const calls = Array.isArray(message?.content) ? message.content.filter((item) => item?.type === "toolCall") : [];
   return calls.map((call) => ({
     id: call.id || call.toolCallId || null,
@@ -819,12 +853,14 @@ function toolCommandFromMessage(message) {
     title: `${call.name || "tool"} requested`,
     command: compactValue(call.arguments?.command || call.input?.command || call.arguments || call.input || "", 180),
     detail: compactText(call.arguments?.cwd || call.input?.cwd || "", 120),
+    ...sessionEventFields(session),
   }));
 }
 
-function parseTranscriptMessages(lines) {
+function parseTranscriptMessages(lines, session) {
   const messages = [];
   const toolEvents = [];
+  const sessionFields = sessionEventFields(session);
 
   for (const row of lines) {
     const message = row.message || {};
@@ -832,23 +868,25 @@ function parseTranscriptMessages(lines) {
     if (message.role === "user") {
       messages.push({
         at,
-        channel: message.sourceChannel || "openclaw",
+        channel: message.sourceChannel || sessionFields.sessionChannel || "openclaw",
         actor: message.senderName || "Roni",
         role: "human",
         text: textFromContent(message.content, 360),
+        ...sessionFields,
       });
     } else if (message.role === "assistant") {
       const text = textFromContent(message.content, 360);
       if (text) {
         messages.push({
           at,
-          channel: "openclaw",
+          channel: message.sourceChannel || "openclaw",
           actor: "Vale",
           role: "agent",
           text,
+          ...sessionFields,
         });
       }
-      toolEvents.push(...toolCommandFromMessage(message));
+      toolEvents.push(...toolCommandFromMessage(message, session));
     } else if (message.role === "toolResult") {
       toolEvents.push({
         id: message.toolCallId || null,
@@ -859,19 +897,21 @@ function parseTranscriptMessages(lines) {
         title: `${message.toolName || "tool"} ${message.isError ? "failed" : "completed"}`,
         command: message.toolCallId || "",
         detail: textFromContent(message.content, 220),
+        ...sessionFields,
       });
     }
   }
 
   return {
-    messages: messages.filter((item) => item.text).slice(-9),
-    toolEvents: toolEvents.filter((item) => item.title).slice(-10),
+    messages: messages.filter((item) => item.text),
+    toolEvents: toolEvents.filter((item) => item.title),
   };
 }
 
-function parseTrajectory(lines) {
+function parseTrajectory(lines, session) {
   const events = [];
   const openToolCalls = new Map();
+  const sessionFields = sessionEventFields(session);
 
   for (const row of lines) {
     const data = row.data || {};
@@ -885,9 +925,10 @@ function parseTrajectory(lines) {
         title: `${data.name || "tool"} command`,
         command: compactValue(data.arguments?.command || data.arguments || "", 220),
         detail: compactText(data.arguments?.cwd || row.sessionKey || "", 140),
+        ...sessionFields,
       };
       events.push(event);
-      openToolCalls.set(event.id || `${row.ts}:${event.kind}`, event);
+      openToolCalls.set(`${session?.key || "session"}:${event.id || `${row.ts}:${event.kind}`}`, event);
       continue;
     }
     if (row.type === "tool.result") {
@@ -901,34 +942,138 @@ function parseTrajectory(lines) {
         command: compactText(data.result ? JSON.stringify(data.result) : "", 140),
         detail: compactText(data.output || "", 240),
         durationMs: data.result?.durationMs ?? null,
+        ...sessionFields,
       };
       events.push(event);
-      if (event.id) openToolCalls.delete(event.id);
+      if (event.id) openToolCalls.delete(`${session?.key || "session"}:${event.id}`);
     }
   }
 
   return {
-    events: events.filter(Boolean).slice(-14),
+    events: events.filter(Boolean),
     openToolCalls: [...openToolCalls.values()]
       .filter((event) => event.status === "running")
       .slice(-8),
   };
 }
 
+function dedupeBy(items, keyFn) {
+  const seen = new Set();
+  const deduped = [];
+  for (const item of items) {
+    const key = keyFn(item);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(item);
+  }
+  return deduped;
+}
+
+function eventTime(value) {
+  return timestampMs(value?.at) || 0;
+}
+
+function messageDedupeKey(message) {
+  return [
+    message.sessionKey || "",
+    timestampMs(message.at) || message.at || "",
+    message.role || "",
+    message.channel || "",
+    message.text || "",
+  ].join("|");
+}
+
+function buildTranscriptChannels(messages) {
+  const byChannel = new Map();
+  for (const message of messages) {
+    const id = message.channel || "openclaw";
+    const current = byChannel.get(id) || { id, count: 0, latestAt: null, humanCount: 0, agentCount: 0 };
+    current.count += 1;
+    if (message.role === "human") current.humanCount += 1;
+    if (message.role === "agent") current.agentCount += 1;
+    if ((timestampMs(message.at) || 0) > (timestampMs(current.latestAt) || 0)) current.latestAt = message.at || current.latestAt;
+    byChannel.set(id, current);
+  }
+  return [...byChannel.values()].sort((a, b) => (timestampMs(b.latestAt) || 0) - (timestampMs(a.latestAt) || 0));
+}
+
+function transcriptKicker(channels, sessionCount) {
+  const channelIds = channels
+    .map((channel) => channel.id)
+    .filter(Boolean)
+    .slice(0, 3);
+  if (channelIds.length) {
+    const suffix = channels.length > channelIds.length ? ` +${channels.length - channelIds.length}` : "";
+    return `Unified local thread // ${channelIds.join(" + ")}${suffix}`;
+  }
+  if (sessionCount > 1) return `Unified local thread // ${sessionCount} sessions`;
+  return "Local OpenClaw thread";
+}
+
 async function collectTranscript(sessionsJson) {
-  const session = latestSession(sessionsJson);
-  const transcriptLines = await readJsonlTail(sessionArtifactPath(session, ".jsonl"), 110);
-  const trajectoryLines = await readJsonlTail(sessionArtifactPath(session, ".trajectory.jsonl"), 120);
-  const parsed = parseTranscriptMessages(transcriptLines);
-  const trajectory = parseTrajectory(trajectoryLines);
+  const latest = latestSession(sessionsJson);
+  const sessions = transcriptSessionCandidates(sessionsJson);
+  const hasDirectSessions = sessions.some((session) => session.kind !== "spawn-child");
+  const collected = await Promise.all(sessions.map(async (session) => {
+    const transcriptLines = await readJsonlTail(sessionArtifactPath(session, ".jsonl"), 140);
+    const trajectoryLines = await readJsonlTail(sessionArtifactPath(session, ".trajectory.jsonl"), 140);
+    const parsed = parseTranscriptMessages(transcriptLines, session);
+    const trajectory = parseTrajectory(trajectoryLines, session);
+    const includeMessages = !hasDirectSessions || session.kind !== "spawn-child";
+    return {
+      session,
+      includeMessages,
+      parsed,
+      trajectory,
+      transcriptLines: transcriptLines.length,
+      trajectoryLines: trajectoryLines.length,
+    };
+  }));
+
+  const allMessages = dedupeBy(
+    collected
+      .flatMap((item) => (item.includeMessages ? item.parsed.messages : []))
+      .filter((message) => message.text)
+      .sort((a, b) => eventTime(a) - eventTime(b)),
+    messageDedupeKey,
+  );
+  const channels = buildTranscriptChannels(allMessages);
+  const toolEvents = collected
+    .flatMap((item) => [...item.parsed.toolEvents, ...item.trajectory.events])
+    .filter((item) => item.title)
+    .sort((a, b) => eventTime(a) - eventTime(b));
+  const openToolCalls = collected
+    .flatMap((item) => item.trajectory.openToolCalls)
+    .filter((event) => event.status === "running")
+    .slice(-8);
+
   return {
-    sessionKey: session?.key || null,
-    sessionId: session?.sessionId || null,
-    messages: parsed.messages,
-    toolEvents: [...parsed.toolEvents, ...trajectory.events]
-      .sort((a, b) => new Date(a.at || 0).getTime() - new Date(b.at || 0).getTime())
+    sessionKey: latest?.key || null,
+    sessionId: latest?.sessionId || null,
+    primarySessionKey: latest?.key || null,
+    scope: "unified-local-sessions",
+    kicker: transcriptKicker(channels, sessions.length),
+    channels,
+    sessions: collected.map((item) => ({
+      key: item.session.key,
+      kind: item.session.kind || "session",
+      agentId: item.session.agentId || null,
+      channel: inferSessionChannel(item.session),
+      updatedAt: item.session.updatedAt || null,
+      includedMessages: item.includeMessages,
+      messageCount: item.parsed.messages.length,
+      toolEventCount: item.parsed.toolEvents.length + item.trajectory.events.length,
+      transcriptLines: item.transcriptLines,
+      trajectoryLines: item.trajectoryLines,
+    })),
+    sessionCount: sessions.length,
+    directSessionCount: sessions.filter((session) => session.kind !== "spawn-child").length,
+    messageCount: allMessages.length,
+    toolEventCount: toolEvents.length,
+    messages: allMessages.slice(-transcriptMessageLimit),
+    toolEvents: toolEvents
       .slice(-14),
-    openToolCalls: trajectory.openToolCalls,
+    openToolCalls,
     source: "openclaw-session-store",
   };
 }
@@ -1072,6 +1217,13 @@ function terminalEventView(event) {
 function buildUiViewModel(snapshot) {
   const mode = currentMode(snapshot);
   const channel = snapshot.integrations?.channels?.[0] || null;
+  const transcriptChannels = snapshot.transcript?.channels || [];
+  const transcriptChannelLabel = transcriptChannels.length
+    ? transcriptChannels
+      .slice(0, 3)
+      .map((item) => item.id)
+      .join("+")
+    : "none";
   const sessions = flattenSessions(snapshot);
   const current = sessions[0]?.session || null;
   const collectors = Object.entries(snapshot.collectors || {});
@@ -1096,8 +1248,8 @@ function buildUiViewModel(snapshot) {
 
   const sensors = [
     ["Mode", modeLabel(mode), mode],
-    ["Messages", `${snapshot.transcript?.messages?.length || 0}`, "active"],
-    ["Tool Events", `${snapshot.transcript?.toolEvents?.length || 0}`, "active"],
+    ["Messages", `${snapshot.transcript?.messageCount ?? snapshot.transcript?.messages?.length ?? 0}`, "active"],
+    ["Tool Events", `${snapshot.transcript?.toolEventCount ?? snapshot.transcript?.toolEvents?.length ?? 0}`, "active"],
     ["Commands", `${snapshot.commandEvents?.length || 0}`, "active"],
     ["Proc", `${processSummary.activeActivityCount || 0}`, processSummary.activeActivityCount ? "active" : "neutral"],
     ["TCP", `${processSummary.establishedTcpConnectionCount || 0}`, processSummary.establishedTcpConnectionCount ? "active" : "neutral"],
@@ -1117,14 +1269,20 @@ function buildUiViewModel(snapshot) {
       { label: modeLabel(mode), status: mode },
       { label: `Gateway ${snapshot.gateway?.status || "unknown"}`, status: snapshot.gateway?.status || "unknown" },
       { label: channel ? `${channel.id} ${channel.status}` : "no channel", status: channel?.status || "unknown" },
-      { label: `${snapshot.transcript?.messages?.length || 0} messages`, status: "active" },
+      { label: `Conv ${transcriptChannelLabel}`, status: transcriptChannels.length ? "active" : "unknown" },
+      { label: `${snapshot.transcript?.messageCount ?? snapshot.transcript?.messages?.length ?? 0} messages`, status: "active" },
       { label: snapshot.generatedAt, status: "active", kind: "timestamp" },
     ],
     conversation: {
-      title: "OpenClaw Messages",
-      kicker: "Telegram-origin session",
+      title: "OpenClaw Conversation",
+      kicker: snapshot.transcript?.kicker || "Unified local thread",
       source: snapshot.transcript?.source || "unknown",
       sessionKey: snapshot.transcript?.sessionKey || null,
+      scope: snapshot.transcript?.scope || "unknown",
+      channels: transcriptChannels,
+      sessions: snapshot.transcript?.sessions || [],
+      sessionCount: snapshot.transcript?.sessionCount || 0,
+      messageCount: snapshot.transcript?.messageCount ?? snapshot.transcript?.messages?.length ?? 0,
       messages: snapshot.transcript?.messages || [],
     },
     activeEvent: {

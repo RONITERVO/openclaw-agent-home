@@ -45,10 +45,15 @@ http://127.0.0.1:18880/api/reaction
     { "label": "Gateway ok", "status": "ok" }
   ],
   "conversation": {
-    "title": "OpenClaw Messages",
-    "kicker": "Telegram-origin session",
+    "title": "OpenClaw Conversation",
+    "kicker": "Unified local thread // webchat + telegram",
+    "scope": "unified-local-sessions",
+    "channels": [
+      { "id": "webchat", "count": 3, "latestAt": "..." },
+      { "id": "telegram", "count": 2, "latestAt": "..." }
+    ],
     "messages": [
-      { "actor": "Roni Tervo", "role": "human", "channel": "telegram", "at": "...", "text": "..." }
+      { "actor": "Roni Tervo", "role": "human", "channel": "webchat", "at": "...", "text": "..." }
     ]
   },
   "activeEvent": {
@@ -161,8 +166,8 @@ actually know:
 - `cron-wake` / `cron-job`: cron exposes a concrete next wake/run timestamp.
 - `heartbeat`: heartbeat interval and last heartbeat imply a next opportunity,
   but it can still skip.
-- `pending-reply`: the latest stored message is from the human and no newer
-  agent message is stored.
+- `pending-reply`: the latest unified local transcript message is from the
+  human and no newer agent message is stored.
 - `needs-human`: attention state says the next useful reaction depends on the
   human or an external state change.
 
