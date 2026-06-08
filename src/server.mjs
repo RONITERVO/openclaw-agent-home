@@ -185,11 +185,16 @@ function clamp(value, min = 0, max = 1) {
 
 function mergeGoalConfig(base, local) {
   if (!base && !local) return null;
-  return {
+  const merged = {
     ...(base || {}),
     ...(local || {}),
     checkins: local?.checkins || base?.checkins || [],
   };
+  if (local && (local.format === "currency" || local.currency) && !Object.hasOwn(local, "unit")) {
+    delete merged.unit;
+    delete merged.unitPlural;
+  }
+  return merged;
 }
 
 function goalCurveFraction(fraction, pace) {
