@@ -17,9 +17,6 @@ const port = Number(process.env.AGENT_HOME_PORT || 18880);
 const isWindows = process.platform === "win32";
 const transcriptSessionLimit = envInt("AGENT_HOME_TRANSCRIPT_SESSION_LIMIT", 8);
 const transcriptMessageLimit = envInt("AGENT_HOME_TRANSCRIPT_MESSAGE_LIMIT", 9);
-const taskFailureAttentionMs = envInt("AGENT_HOME_TASK_FAILURE_ATTENTION_MINUTES", 45) * 60 * 1000;
-const goalFilePath = process.env.AGENT_HOME_GOAL_FILE ? resolve(process.env.AGENT_HOME_GOAL_FILE) : join(rootDir, "goal.json");
-const goalLocalFilePath = process.env.AGENT_HOME_GOAL_FILE ? null : join(rootDir, "goal.local.json");
 
 const contentTypes = new Map([
   [".html", "text/html; charset=utf-8"],
@@ -112,21 +109,6 @@ function tryJson(text, fallback = null) {
   }
 }
 
-async function readJsonFile(path) {
-  if (!path) return { found: false, data: null, error: null };
-  try {
-    const text = await readFile(path, "utf8");
-    const data = tryJson(text, null);
-    if (!data || typeof data !== "object" || Array.isArray(data)) {
-      return { found: true, data: null, error: "JSON root must be an object" };
-    }
-    return { found: true, data, error: null };
-  } catch (error) {
-    if (error?.code === "ENOENT") return { found: false, data: null, error: null };
-    return { found: false, data: null, error: String(error?.message || error) };
-  }
-}
-
 function redact(value) {
   if (value == null) return value;
   let text = String(value);
@@ -168,286 +150,6 @@ function durationLabel(ms) {
   if (hours < 48) return `${hours}h`;
   const days = Math.round(hours / 24);
   return `${days}d`;
-}
-
-function dateOnlyTimestamp(value, { endOfDay = false } = {}) {
-  if (value == null) return null;
-  const text = String(value).trim();
-  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
-    return new Date(`${text}T${endOfDay ? "23:59:59.999" : "00:00:00.000"}`).getTime();
-  }
-  return timestampMs(text);
-}
-
-function clamp(value, min = 0, max = 1) {
-  return Math.max(min, Math.min(max, value));
-}
-
-function mergeGoalConfig(base, local) {
-  if (!base && !local) return null;
-  const merged = {
-    ...(base || {}),
-    ...(local || {}),
-    checkins: local?.checkins || base?.checkins || [],
-  };
-  if (local && (local.format === "currency" || local.currency) && !Object.hasOwn(local, "unit")) {
-    delete merged.unit;
-    delete merged.unitPlural;
-  }
-  return merged;
-}
-
-function goalCurveFraction(fraction, pace) {
-  const value = clamp(Number(fraction) || 0);
-  const mode = String(pace || "steady").toLowerCase();
-  if (["frontloaded", "front-loaded", "early"].includes(mode)) return Math.sqrt(value);
-  if (["soft-start", "softstart", "backloaded", "late"].includes(mode)) return value ** 1.45;
-  return value;
-}
-
-function goalNumberLabel(value, { signed = false } = {}) {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) return "unknown";
-  const abs = Math.abs(numeric);
-  const digits = abs >= 100 || Number.isInteger(numeric) ? 0 : abs >= 10 ? 1 : 2;
-  const label = new Intl.NumberFormat("en-US", {
-    maximumFractionDigits: digits,
-    minimumFractionDigits: 0,
-  }).format(numeric);
-  return signed && numeric > 0 ? `+${label}` : label;
-}
-
-function goalCurrencyLabel(value, currency = "USD") {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) return "unknown";
-  const abs = Math.abs(numeric);
-  const digits = abs >= 100 || Number.isInteger(numeric) ? 0 : abs >= 10 ? 1 : 2;
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency,
-    maximumFractionDigits: digits,
-    minimumFractionDigits: 0,
-  }).format(numeric);
-}
-
-function goalUnitLabel(value, unit, pluralUnit = null) {
-  if (!unit) return "";
-  const numeric = Math.abs(Number(value));
-  if (numeric === 1) return unit;
-  return pluralUnit || (String(unit).endsWith("s") ? unit : `${unit}s`);
-}
-
-function goalValueLabel(value, unit, options = {}) {
-  if (options.format === "currency" || options.currency) {
-    return goalCurrencyLabel(value, options.currency || unit || "USD");
-  }
-  const label = goalNumberLabel(value, options);
-  const unitLabel = goalUnitLabel(value, unit, options.pluralUnit);
-  return unitLabel ? `${label} ${unitLabel}` : label;
-}
-
-function goalDateLabel(timestamp) {
-  if (!Number.isFinite(Number(timestamp))) return "unknown";
-  return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" }).format(new Date(timestamp));
-}
-
-function latestGoalCheckin(config) {
-  return (Array.isArray(config?.checkins) ? config.checkins : [])
-    .map((item) => ({
-      at: dateOnlyTimestamp(item?.at || item?.date || item?.time),
-      value: Number(item?.value ?? item?.current),
-      note: compactText(item?.note || "", 120),
-    }))
-    .filter((item) => Number.isFinite(item.value))
-    .sort((a, b) => Number(b.at || 0) - Number(a.at || 0))[0] || null;
-}
-
-async function collectGoalProgress(now) {
-  const [baseResult, localResult] = await Promise.all([
-    readJsonFile(goalFilePath),
-    readJsonFile(goalLocalFilePath),
-  ]);
-  const sourcePath = localResult.found ? goalLocalFilePath : baseResult.found ? goalFilePath : null;
-  const errors = [
-    baseResult.error ? `${goalFilePath}: ${baseResult.error}` : null,
-    localResult.error ? `${goalLocalFilePath}: ${localResult.error}` : null,
-  ].filter(Boolean);
-
-  if (!baseResult.found && !localResult.found) {
-    return { available: false, enabled: false, ok: true, sourcePath: null, error: null };
-  }
-  if (errors.length) {
-    const error = compactText(errors.join("; "), 220);
-    return {
-      available: true,
-      enabled: true,
-      ok: false,
-      sourcePath,
-      status: "warning",
-      title: "Goal config needs review",
-      error,
-      insight: error,
-      progressPercent: 0,
-      expectedPercent: 0,
-      metrics: [
-        { label: "Config", value: "review" },
-        { label: "Source", value: sourcePath ? "file" : "missing" },
-        { label: "Need", value: "valid JSON" },
-        { label: "Finish", value: "unknown" },
-      ],
-    };
-  }
-
-  const config = mergeGoalConfig(baseResult.data, localResult.data);
-  if (!config || config.enabled === false) {
-    return { available: true, enabled: false, ok: true, sourcePath, error: null };
-  }
-  const valueLabel = (value, options = {}) => goalValueLabel(value, config.unit, {
-    pluralUnit: config.unitPlural,
-    format: config.format,
-    currency: config.currency,
-    ...options,
-  });
-
-  const baseline = Number(config.baseline ?? config.startValue ?? 0);
-  const target = Number(config.target);
-  const explicitCurrent = Number(config.current ?? config.value);
-  const checkin = latestGoalCheckin(config);
-  const current = checkin ? checkin.value : explicitCurrent;
-  const startAt = dateOnlyTimestamp(config.start || config.startedAt, { endOfDay: false });
-  const dueAt = dateOnlyTimestamp(config.due || config.deadline || config.targetAt, { endOfDay: true });
-
-  if (!Number.isFinite(baseline) || !Number.isFinite(target) || !Number.isFinite(current) || startAt == null || dueAt == null || dueAt <= startAt) {
-    const error = "Goal needs numeric baseline/current/target plus valid start and due dates.";
-    return {
-      available: true,
-      enabled: true,
-      ok: false,
-      sourcePath,
-      status: "warning",
-      title: compactText(config.title || "Goal", 80),
-      error,
-      insight: error,
-      progressPercent: 0,
-      expectedPercent: 0,
-      metrics: [
-        { label: "Config", value: "review" },
-        { label: "Target", value: Number.isFinite(target) ? valueLabel(target) : "missing" },
-        { label: "Need", value: "valid dates" },
-        { label: "Finish", value: "unknown" },
-      ],
-    };
-  }
-
-  const direction = String(config.direction || "").toLowerCase().startsWith("de")
-    ? -1
-    : target < baseline ? -1 : 1;
-  const total = Math.abs(target - baseline);
-  const rawAchieved = direction * (current - baseline);
-  const achieved = clamp(rawAchieved, 0, total);
-  const remaining = Math.max(0, total - achieved);
-  const actualFraction = total > 0 ? achieved / total : 1;
-  const actualPercent = Math.round(clamp(actualFraction) * 100);
-  const dayMs = 24 * 60 * 60 * 1000;
-  const elapsedMs = Math.max(0, now - startAt);
-  const totalMs = Math.max(dayMs / 24, dueAt - startAt);
-  const elapsedFraction = clamp(elapsedMs / totalMs);
-  const expectedFraction = goalCurveFraction(elapsedFraction, config.pace || config.curve);
-  const expectedAchieved = total * expectedFraction;
-  const expectedValue = baseline + direction * expectedAchieved;
-  const delta = achieved - expectedAchieved;
-  const tolerance = clamp(Number(config.tolerance ?? 0.05), 0, 0.5);
-  const toleranceAmount = Math.max(total * tolerance, 0.000001);
-  const daysElapsed = elapsedMs / dayMs;
-  const daysLeft = Math.max(0, (dueAt - now) / dayMs);
-  const observedPerDay = daysElapsed > 0 ? achieved / daysElapsed : null;
-  const requiredPerDay = remaining > 0 && daysLeft > 0 ? remaining / daysLeft : null;
-  const forecastFinishAt = observedPerDay && observedPerDay > 0
-    ? startAt + (total / observedPerDay) * dayMs
-    : null;
-  const done = total === 0 || achieved >= total;
-  const late = !done && now > dueAt;
-  const status = done
-    ? "done"
-    : late
-      ? "late"
-      : delta < -toleranceAmount
-        ? "behind"
-        : delta > toleranceAmount
-          ? "ahead"
-          : "on-track";
-  const deltaAbs = Math.abs(delta);
-  const deltaLabel = done
-    ? "complete"
-    : deltaAbs <= toleranceAmount
-      ? "on pace"
-      : `${valueLabel(deltaAbs)} ${delta > 0 ? "ahead" : "behind"}`;
-  const requiredPaceLabel = done
-    ? "done"
-    : requiredPerDay == null
-      ? "deadline passed"
-      : `${valueLabel(requiredPerDay)}/day needed`;
-  const observedPaceLabel = observedPerDay == null
-    ? "no pace yet"
-    : `${valueLabel(observedPerDay)}/day actual`;
-  const finishLabel = done
-    ? "done"
-    : forecastFinishAt == null
-      ? "finish unknown"
-      : `${goalDateLabel(forecastFinishAt)} forecast`;
-  const daysLeftLabel = done
-    ? "0d left"
-    : `${Math.ceil(daysLeft)}d left`;
-  const insight = done
-    ? "Target reached."
-    : late
-      ? `${valueLabel(remaining)} still open after the due date.`
-      : `${deltaLabel}; ${requiredPaceLabel}.`;
-
-  return {
-    schemaVersion: 1,
-    available: true,
-    enabled: true,
-    ok: true,
-    sourcePath,
-    title: compactText(config.title || "Goal", 90),
-    description: compactText(config.description || "", 180),
-    unit: config.unit || "",
-    pace: config.pace || config.curve || "steady",
-    status,
-    statusLabel: status === "on-track" ? "on track" : status,
-    current,
-    target,
-    baseline,
-    remaining,
-    currentLabel: valueLabel(current),
-    targetLabel: valueLabel(target),
-    remainingLabel: valueLabel(remaining),
-    expectedLabel: valueLabel(expectedValue),
-    progressPercent: actualPercent,
-    expectedPercent: Math.round(clamp(expectedFraction) * 100),
-    actualFraction: clamp(actualFraction),
-    expectedFraction: clamp(expectedFraction),
-    delta,
-    deltaLabel,
-    requiredPerDay,
-    requiredPaceLabel,
-    observedPerDay,
-    observedPaceLabel,
-    daysLeft,
-    daysLeftLabel,
-    dueLabel: goalDateLabel(dueAt),
-    forecastFinishAt: forecastFinishAt == null ? null : new Date(forecastFinishAt).toISOString(),
-    finishLabel,
-    insight,
-    latestCheckin: checkin ? { at: checkin.at == null ? null : new Date(checkin.at).toISOString(), value: checkin.value, note: checkin.note } : null,
-    metrics: [
-      { label: "Now", value: valueLabel(current) },
-      { label: "Target", value: valueLabel(target) },
-      { label: "Need", value: requiredPaceLabel },
-      { label: "Finish", value: finishLabel },
-    ],
-  };
 }
 
 function confidenceRank(value) {
@@ -613,24 +315,7 @@ function parseSecurityAudit(text) {
   return { summary, warnings: warnings.slice(0, 8) };
 }
 
-function taskAttentionItem(task, now) {
-  if (!["failed", "timed_out", "cancelled", "lost", "blocked"].includes(task.status)) return null;
-  if (task.status !== "blocked") {
-    const eventAt = timestampMs(task.endedAt || task.lastEventAt || task.startedAt || task.createdAt);
-    if (eventAt != null && now - eventAt > taskFailureAttentionMs) return null;
-  }
-
-  const eventAt = timestampMs(task.endedAt || task.lastEventAt || task.startedAt || task.createdAt);
-  const ageLabel = eventAt == null ? "" : ` ${durationLabel(now - eventAt)} ago`;
-  return {
-    severity: task.status === "cancelled" ? "notice" : "warning",
-    source: "task",
-    title: task.label || "Task needs review",
-    reason: compactText(`${task.summary || `Task status is ${task.status}.`}${ageLabel ? ` (${task.status}${ageLabel})` : ""}`, 220),
-  };
-}
-
-function buildAttention({ statusJson, tasks, security, windows, processMonitor, now }) {
+function buildAttention({ statusJson, tasks, security, windows, processMonitor }) {
   const items = [];
 
   if (!statusJson?.gateway?.reachable) {
@@ -655,8 +340,14 @@ function buildAttention({ statusJson, tasks, security, windows, processMonitor, 
   }
 
   for (const task of tasks) {
-    const item = taskAttentionItem(task, now);
-    if (item) items.push(item);
+    if (["failed", "timed_out", "cancelled", "lost", "blocked"].includes(task.status)) {
+      items.push({
+        severity: "warning",
+        source: "task",
+        title: task.label || "Task needs review",
+        reason: task.summary || `Task status is ${task.status}.`,
+      });
+    }
   }
 
   if (statusJson?.taskAudit?.warnings || statusJson?.taskAudit?.errors) {
@@ -1539,7 +1230,6 @@ function buildUiViewModel(snapshot) {
   const okCollectors = collectors.filter(([, value]) => value.ok).length;
   const windows = snapshot.integrations?.windows || {};
   const processSummary = snapshot.processMonitor?.summary || {};
-  const goal = snapshot.goalProgress?.enabled ? snapshot.goalProgress : null;
   const allTerminalEvents = [...processMonitorEvents(snapshot.processMonitor), ...(snapshot.transcript?.toolEvents || []), ...(snapshot.commandEvents || [])]
     .sort((a, b) => new Date(b.at || 0).getTime() - new Date(a.at || 0).getTime());
   const terminalEvents = allTerminalEvents.slice(0, 9).map(terminalEventView);
@@ -1561,7 +1251,6 @@ function buildUiViewModel(snapshot) {
     ["Messages", `${snapshot.transcript?.messageCount ?? snapshot.transcript?.messages?.length ?? 0}`, "active"],
     ["Tool Events", `${snapshot.transcript?.toolEventCount ?? snapshot.transcript?.toolEvents?.length ?? 0}`, "active"],
     ["Commands", `${snapshot.commandEvents?.length || 0}`, "active"],
-    ...(goal ? [["Goal", `${goal.progressPercent}%`, goal.status]] : []),
     ["Proc", `${processSummary.activeActivityCount || 0}`, processSummary.activeActivityCount ? "active" : "neutral"],
     ["TCP", `${processSummary.establishedTcpConnectionCount || 0}`, processSummary.establishedTcpConnectionCount ? "active" : "neutral"],
     ["Collectors", `${okCollectors}/${collectors.length}`, okCollectors === collectors.length ? "ok" : "warning"],
@@ -1580,7 +1269,6 @@ function buildUiViewModel(snapshot) {
       { label: modeLabel(mode), status: mode },
       { label: `Gateway ${snapshot.gateway?.status || "unknown"}`, status: snapshot.gateway?.status || "unknown" },
       { label: channel ? `${channel.id} ${channel.status}` : "no channel", status: channel?.status || "unknown" },
-      ...(goal ? [{ label: `Goal ${goal.progressPercent}%`, status: goal.status }] : []),
       { label: `Conv ${transcriptChannelLabel}`, status: transcriptChannels.length ? "active" : "unknown" },
       { label: `${snapshot.transcript?.messageCount ?? snapshot.transcript?.messages?.length ?? 0} messages`, status: "active" },
       { label: snapshot.generatedAt, status: "active", kind: "timestamp" },
@@ -1624,7 +1312,6 @@ function buildUiViewModel(snapshot) {
       count: snapshot.attention?.length || 0,
       items: (snapshot.attention || []).slice(0, 4),
     },
-    goal,
     reactionForecast: snapshot.reactionForecast || null,
     fileEdits: snapshot.fileEdits || {
       title: "File Edits",
@@ -1882,7 +1569,7 @@ export async function collectSnapshot({ force = false } = {}) {
   if (inFlightSnapshot) return inFlightSnapshot;
 
   inFlightSnapshot = (async () => {
-    const [statusResult, sessionsResult, tasksResult, cronStatusResult, cronListResult, securityResult, windows, processMonitor, goalProgress] = await Promise.all([
+    const [statusResult, sessionsResult, tasksResult, cronStatusResult, cronListResult, securityResult, windows, processMonitor] = await Promise.all([
       runOpenClaw(["status", "--deep", "--json"], { timeoutMs: 18000, collector: "status" }),
       runOpenClaw(["sessions", "--all-agents", "--limit", "50", "--json"], { timeoutMs: 12000, collector: "sessions" }),
       runOpenClaw(["tasks", "list", "--json"], { timeoutMs: 12000, collector: "tasks" }),
@@ -1891,7 +1578,6 @@ export async function collectSnapshot({ force = false } = {}) {
       runOpenClaw(["security", "audit", "--deep"], { timeoutMs: 12000, collector: "security" }),
       collectWindowsPosture(),
       collectProcessMonitor({ rootDir, workspaceDir }),
-      collectGoalProgress(now),
     ]);
 
     const statusJson = tryJson(statusResult.stdout, {});
@@ -1903,7 +1589,7 @@ export async function collectSnapshot({ force = false } = {}) {
     const tasks = buildTasks(tasksJson);
     const agents = buildAgents(statusJson, sessionsJson, tasksJson, now);
     const focus = chooseFocus(sessionsJson.sessions || [], tasks, now);
-    const attention = buildAttention({ statusJson, tasks, security, windows, processMonitor, now });
+    const attention = buildAttention({ statusJson, tasks, security, windows, processMonitor });
     const transcript = await collectTranscript(sessionsJson);
     const reactionForecast = buildReactionForecast({
       now,
@@ -1962,7 +1648,6 @@ export async function collectSnapshot({ force = false } = {}) {
       transcript,
       commandEvents,
       fileEdits,
-      goalProgress,
       processMonitor,
       recentEvents: buildRecentEvents(statusJson, tasks, sessionsJson, security, processMonitor),
       integrations: buildIntegrations(statusJson, cronStatus, cronList, windows),
@@ -1973,7 +1658,6 @@ export async function collectSnapshot({ force = false } = {}) {
         cronStatus: { ok: cronStatusResult.ok, error: compactText(cronStatusResult.error || cronStatusResult.stderr, 120) },
         cronList: { ok: cronListResult.ok, error: compactText(cronListResult.error || cronListResult.stderr, 120) },
         security: { ok: securityResult.ok, error: compactText(securityResult.error || securityResult.stderr, 120) },
-        goal: { ok: Boolean(goalProgress?.ok), error: goalProgress?.error || null },
         windows: { ok: Boolean(windows?.available), error: windows?.error || null },
         processMonitor: { ok: Boolean(processMonitor?.available), error: processMonitor?.error || processMonitor?.collectors?.processTable?.error || null },
       },
