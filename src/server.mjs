@@ -17,6 +17,7 @@ const port = Number(process.env.AGENT_HOME_PORT || 18880);
 const isWindows = process.platform === "win32";
 const transcriptSessionLimit = envInt("AGENT_HOME_TRANSCRIPT_SESSION_LIMIT", 8);
 const transcriptMessageLimit = envInt("AGENT_HOME_TRANSCRIPT_MESSAGE_LIMIT", 9);
+const taskFailureAttentionMs = envInt("AGENT_HOME_TASK_FAILURE_ATTENTION_MINUTES", 45) * 60 * 1000;
 
 const contentTypes = new Map([
   [".html", "text/html; charset=utf-8"],
@@ -315,7 +316,24 @@ function parseSecurityAudit(text) {
   return { summary, warnings: warnings.slice(0, 8) };
 }
 
-function buildAttention({ statusJson, tasks, security, windows, processMonitor }) {
+function taskAttentionItem(task, now) {
+  if (!["failed", "timed_out", "cancelled", "lost", "blocked"].includes(task.status)) return null;
+  if (task.status !== "blocked") {
+    const eventAt = timestampMs(task.endedAt || task.lastEventAt || task.startedAt || task.createdAt);
+    if (eventAt != null && now - eventAt > taskFailureAttentionMs) return null;
+  }
+
+  const eventAt = timestampMs(task.endedAt || task.lastEventAt || task.startedAt || task.createdAt);
+  const ageLabel = eventAt == null ? "" : ` ${durationLabel(now - eventAt)} ago`;
+  return {
+    severity: task.status === "cancelled" ? "notice" : "warning",
+    source: "task",
+    title: task.label || "Task needs review",
+    reason: compactText(`${task.summary || `Task status is ${task.status}.`}${ageLabel ? ` (${task.status}${ageLabel})` : ""}`, 220),
+  };
+}
+
+function buildAttention({ statusJson, tasks, security, windows, processMonitor, now }) {
   const items = [];
 
   if (!statusJson?.gateway?.reachable) {
@@ -340,14 +358,8 @@ function buildAttention({ statusJson, tasks, security, windows, processMonitor }
   }
 
   for (const task of tasks) {
-    if (["failed", "timed_out", "cancelled", "lost", "blocked"].includes(task.status)) {
-      items.push({
-        severity: "warning",
-        source: "task",
-        title: task.label || "Task needs review",
-        reason: task.summary || `Task status is ${task.status}.`,
-      });
-    }
+    const item = taskAttentionItem(task, now);
+    if (item) items.push(item);
   }
 
   if (statusJson?.taskAudit?.warnings || statusJson?.taskAudit?.errors) {
@@ -1589,7 +1601,7 @@ export async function collectSnapshot({ force = false } = {}) {
     const tasks = buildTasks(tasksJson);
     const agents = buildAgents(statusJson, sessionsJson, tasksJson, now);
     const focus = chooseFocus(sessionsJson.sessions || [], tasks, now);
-    const attention = buildAttention({ statusJson, tasks, security, windows, processMonitor });
+    const attention = buildAttention({ statusJson, tasks, security, windows, processMonitor, now });
     const transcript = await collectTranscript(sessionsJson);
     const reactionForecast = buildReactionForecast({
       now,
