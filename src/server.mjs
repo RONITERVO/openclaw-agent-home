@@ -4,7 +4,7 @@
 import { createServer } from "node:http";
 import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
-import { extname, join, normalize, resolve } from "node:path";
+import { extname, isAbsolute, join, relative, resolve } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { collectProcessMonitor } from "./process-monitor.mjs";
@@ -12,7 +12,7 @@ import { collectProcessMonitor } from "./process-monitor.mjs";
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const rootDir = resolve(__dirname, "..");
 const workspaceDir = resolve(rootDir, "..");
-const publicDir = join(rootDir, "public");
+const publicDir = resolve(rootDir, "public");
 const port = Number(process.env.AGENT_HOME_PORT || 18880);
 const isWindows = process.platform === "win32";
 const transcriptSessionLimit = envInt("AGENT_HOME_TRANSCRIPT_SESSION_LIMIT", 8);
@@ -41,6 +41,11 @@ let inFlightSnapshot = null;
 function envInt(name, fallback) {
   const value = Number(process.env[name]);
   return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
+}
+
+function isPathInsideDirectory(parent, target) {
+  const relativePath = relative(parent, target);
+  return relativePath === "" || (!relativePath.startsWith("..") && !isAbsolute(relativePath));
 }
 
 function runFile(file, args, { timeoutMs = 12000, displayCommand = null, collector = null, cwd = null } = {}) {
@@ -1422,8 +1427,8 @@ function truncateRawText(text, max = 12000) {
 }
 
 async function readTextFile(relativePath) {
-  const target = normalize(join(rootDir, relativePath));
-  if (!target.startsWith(rootDir)) return null;
+  const target = resolve(rootDir, relativePath);
+  if (!isPathInsideDirectory(rootDir, target)) return null;
   if (/\.(png|jpg|jpeg|gif|webp|ico|zip|exe|dll|pdf)$/i.test(relativePath)) return null;
   try {
     return await readFile(target, "utf8");
@@ -1691,11 +1696,18 @@ export async function collectSnapshot({ force = false } = {}) {
 
 async function serveStatic(request, response) {
   const url = new URL(request.url || "/", "http://127.0.0.1");
-  const rawPath = url.pathname === "/" ? "/index.html" : decodeURIComponent(url.pathname);
-  const target = normalize(join(publicDir, rawPath));
+  let rawPath;
+  try {
+    rawPath = url.pathname === "/" ? "index.html" : decodeURIComponent(url.pathname).replace(/^[/\\]+/, "");
+  } catch {
+    response.writeHead(400, { "content-type": "text/plain; charset=utf-8" });
+    response.end("Bad request");
+    return;
+  }
+  const target = resolve(publicDir, rawPath);
 
-  if (!target.startsWith(publicDir)) {
-    response.writeHead(403);
+  if (!isPathInsideDirectory(publicDir, target)) {
+    response.writeHead(403, { "content-type": "text/plain; charset=utf-8" });
     response.end("Forbidden");
     return;
   }

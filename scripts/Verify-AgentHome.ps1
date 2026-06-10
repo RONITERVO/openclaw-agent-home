@@ -10,6 +10,7 @@ param(
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 $url = "http://127.0.0.1:$Port/"
+$serverProcess = $null
 
 Push-Location $root
 try {
@@ -26,7 +27,7 @@ try {
         Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue
       }
     }
-  Start-Process -FilePath "node" -ArgumentList "src/server.mjs" -WorkingDirectory $root -WindowStyle Hidden
+  $serverProcess = Start-Process -FilePath "node" -ArgumentList "src/server.mjs" -WorkingDirectory $root -WindowStyle Hidden -PassThru
   Start-Sleep -Seconds 2
 
   $edgePaths = @(
@@ -92,7 +93,7 @@ async function main() {
   await send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false });
   await send("Page.navigate", { url });
   for (let i = 0; i < 25; i++) {
-    const ready = await send("Runtime.evaluate", { returnByValue: true, expression: "Boolean(document.querySelector('.signal-stage'))" });
+    const ready = await send("Runtime.evaluate", { returnByValue: true, expression: "Boolean(document.querySelector('#app-mount:not(.hidden) #region-top') && document.querySelectorAll('.panel').length >= 3)" });
     if (ready.result.result.value) break;
     await sleep(1000);
   }
@@ -106,7 +107,7 @@ async function main() {
       overflowX: document.documentElement.scrollWidth > document.documentElement.clientWidth,
       overflowY: document.documentElement.scrollHeight > document.documentElement.clientHeight,
       visiblePanels: [...document.querySelectorAll('.panel')].filter((node) => getComputedStyle(node).display !== 'none').length,
-      screen: document.querySelector('.terminal h2')?.innerText || null,
+      screen: document.querySelector('#region-term h2')?.innerText || null,
       sensors: document.querySelectorAll('.sensor').length
     }))()`
   });
@@ -136,5 +137,8 @@ finally {
   Get-CimInstance Win32_Process -Filter "name = 'msedge.exe'" |
     Where-Object { $_.CommandLine -like "*remote-debugging-port=9230*" } |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+  if ($serverProcess -and -not $serverProcess.HasExited) {
+    Stop-Process -Id $serverProcess.Id -Force -ErrorAction SilentlyContinue
+  }
   Pop-Location
 }
