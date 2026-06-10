@@ -2,14 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { readFile } from "node:fs/promises";
-import { extname, join, normalize, resolve } from "node:path";
+import { extname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { collectSnapshot } from "./server.mjs";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const rootDir = resolve(__dirname, "..");
-const publicDir = join(rootDir, "public");
+const publicDir = resolve(rootDir, "public");
 const routeBase = "/__openclaw__/agent-home";
 
 const contentTypes = new Map([
@@ -26,6 +26,11 @@ function sendJson(response, statusCode, payload) {
     "cache-control": "no-store",
   });
   response.end(JSON.stringify(payload, null, 2));
+}
+
+function isPathInsideDirectory(parent, target) {
+  const relativePath = relative(parent, target);
+  return relativePath === "" || (!relativePath.startsWith("..") && !isAbsolute(relativePath));
 }
 
 async function serveAgentHomeRoute(request, response) {
@@ -70,8 +75,17 @@ async function serveAgentHomeRoute(request, response) {
   if (!url.pathname.startsWith(prefix)) return false;
 
   const relativePath = url.pathname.slice(prefix.length) || "index.html";
-  const target = normalize(join(publicDir, decodeURIComponent(relativePath)));
-  if (!target.startsWith(publicDir)) {
+  let decodedPath;
+  try {
+    decodedPath = decodeURIComponent(relativePath);
+  } catch {
+    response.writeHead(400, { "content-type": "text/plain; charset=utf-8" });
+    response.end("Bad request");
+    return true;
+  }
+
+  const target = resolve(publicDir, decodedPath);
+  if (!isPathInsideDirectory(publicDir, target)) {
     response.writeHead(403, { "content-type": "text/plain; charset=utf-8" });
     response.end("Forbidden");
     return true;
